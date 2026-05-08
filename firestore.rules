@@ -1,0 +1,119 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 0. Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Helpers ---
+    function isSignedIn() { return request.auth != null && request.auth.token.email_verified == true; }
+    function isAdmin() { 
+      return isSignedIn() && (
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+        request.auth.token.email == 'elizeuferron@gmail.com'
+      ); 
+    }
+    function isManager() { 
+      return isAdmin() || (isSignedIn() && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'manager'); 
+    }
+    function isOwner(userId) { return isSignedIn() && request.auth.uid == userId; }
+    function incoming() { return request.resource.data; }
+    function existing() { return resource.data; }
+    function isValidId(id) { return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$'); }
+    function isStrictTimestamp(ts) { return ts == request.time; }
+
+    // --- Validation Helpers ---
+    function isValidUser(data) {
+      return data.email is string && data.email.size() <= 100 &&
+             data.role in ['admin', 'manager', 'driver'] &&
+             (data.get('displayName', '') is string) &&
+             (data.get('photoURL', '') is string);
+    }
+
+    function isValidVehicle(data) {
+      return data.plate is string && data.plate.size() <= 10 &&
+             data.model is string && data.model.size() <= 100 &&
+             (data.get('factoryYear', '') is string) &&
+             data.type in ['van', 'bus'] &&
+             data.capacity is number &&
+             data.currentOdometer is number &&
+             data.status in ['available', 'maintenance', 'trip'] &&
+             (data.get('licenseExpiration', '') is string) &&
+             (data.get('tourismLicenseExpiration', '') is string) &&
+             (data.get('insuranceExpiration', '') is string) &&
+             (data.get('updatedAt', '') is string);
+    }
+
+    function isValidChecklist(data) {
+      return data.vehicleId is string &&
+             data.responsible is string &&
+             data.odometer is number &&
+             data.date is string &&
+             data.items is list;
+    }
+
+    // --- Collection Routes ---
+
+    match /users/{userId} {
+      allow get: if isSignedIn();
+      allow list: if isManager();
+      allow create: if isOwner(userId) && isValidUser(incoming()) && incoming().role == 'driver'; // Self-registration as driver
+      allow update: if (isOwner(userId) || isAdmin()) && isValidUser(incoming()) &&
+                    (isAdmin() || (incoming().role == existing().role)); // Only admin can change roles
+    }
+
+    match /vehicles/{vehicleId} {
+      allow read: if isSignedIn();
+      allow create: if isManager() && isValidVehicle(incoming());
+      allow update: if isSignedIn() && isValidVehicle(incoming()) && (
+        isManager() || (incoming().diff(existing()).affectedKeys().hasOnly(['currentOdometer', 'updatedAt', 'status']))
+      );
+    }
+
+    match /employees/{employeeId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    match /fuel_tanks/{tankId} {
+      allow read: if isSignedIn();
+      allow update: if isSignedIn() && (
+        isManager() || (incoming().diff(existing()).affectedKeys().hasOnly(['currentLevel', 'updatedAt']))
+      );
+      allow write: if isManager();
+    }
+
+    match /fuel_logs/{logId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && 
+                    isValidId(incoming().vehicleId) && 
+                    exists(/databases/$(database)/documents/vehicles/$(incoming().vehicleId));
+    }
+
+    match /fuel_entries/{entryId} {
+      allow read: if isSignedIn();
+      allow create: if isManager() && 
+                    isValidId(incoming().tankId) && 
+                    exists(/databases/$(database)/documents/fuel_tanks/$(incoming().tankId));
+    }
+
+    match /maintenance_logs/{logId} {
+      allow read: if isSignedIn();
+      allow create: if isManager();
+      allow update: if isManager() && (existing().status != 'completed' || isAdmin());
+    }
+
+    match /stock_items/{itemId} {
+      allow read: if isSignedIn();
+      allow write: if isManager();
+    }
+
+    match /checklists/{checklistId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && 
+                    isValidChecklist(incoming()) && 
+                    exists(/databases/$(database)/documents/vehicles/$(incoming().vehicleId));
+    }
+  }
+}

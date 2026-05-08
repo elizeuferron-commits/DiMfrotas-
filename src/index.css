@@ -1,0 +1,38 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&family=Outfit:wght@400;700;900&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Outfit", "Inter", ui-sans-serif, system-ui, sans-serif;
+  --color-brand-accent: #f59e0b; /* Amber/Rustic */
+  --color-brand-dark: #0f172a;
+  
+  /* Rustic Dark Palette */
+  --color-zinc-950: #09090b;
+  --color-zinc-900: #18181b;
+  --color-zinc-800: #27272a;
+  --color-zinc-700: #3f3f46;
+}
+
+@layer base {
+  body {
+    @apply bg-zinc-950 text-zinc-100 min-h-screen overflow-x-hidden;
+  }
+}
+
+.bg-rustic-gradient {
+  background: 
+    radial-gradient(at 0% 0%, rgba(245, 158, 11, 0.05) 0px, transparent 50%),
+    radial-gradient(at 100% 100%, rgba(39, 39, 42, 0.2) 0px, transparent 50%);
+  background-attachment: fixed;
+}
+
+.rustic-card {
+  @apply bg-zinc-900/50 backdrop-blur-xl border border-zinc-800/50 rounded-2xl shadow-2xl;
+}
+
+.rustic-border {
+  @apply border-zinc-800;
+}
+
+.glow-amber { box-shadow: 0 0 30px rgba(245, 158, 11, 0.1); }
+

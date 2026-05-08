@@ -1,0 +1,156 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "System users and their roles",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string", "format": "email" },
+        "displayName": { "type": "string" },
+        "role": { "type": "string", "enum": ["admin", "manager", "driver"] },
+        "photoURL": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["email", "role"]
+    },
+    "Vehicle": {
+      "title": "Vehicle",
+      "description": "Vans and buses in the fleet",
+      "type": "object",
+      "properties": {
+        "plate": { "type": "string" },
+        "model": { "type": "string" },
+        "factoryYear": { "type": "string" },
+        "type": { "type": "string", "enum": ["van", "bus"] },
+        "capacity": { "type": "number" },
+        "currentOdometer": { "type": "number" },
+        "licenseExpiration": { "type": "string", "format": "date" },
+        "tourismLicenseExpiration": { "type": "string", "format": "date" },
+        "insuranceExpiration": { "type": "string", "format": "date" },
+        "nextOilChangeKM": { "type": "number" },
+        "nextPreventiveMaintenanceDate": { "type": "string", "format": "date" },
+        "nextMaintenanceKM": { "type": "number" },
+        "lastMaintenanceDate": { "type": "string", "format": "date" },
+        "lastMaintenanceKM": { "type": "number" },
+        "status": { "type": "string", "enum": ["available", "maintenance", "trip"] },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["plate", "model", "type", "currentOdometer"]
+    },
+    "Employee": {
+      "title": "Employee",
+      "description": "Staff including drivers",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "role": { "type": "string" },
+        "licenseNumber": { "type": "string" },
+        "licenseCategory": { "type": "string" },
+        "licenseExpiration": { "type": "string", "format": "date" },
+        "phone": { "type": "string" },
+        "email": { "type": "string" },
+        "status": { "type": "string", "enum": ["active", "inactive"] }
+      },
+      "required": ["name", "role", "status"]
+    },
+    "FuelTank": {
+      "title": "Fuel Tank",
+      "description": "Internal fuel storage tanks",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "fuelType": { "type": "string" },
+        "capacity": { "type": "number" },
+        "currentLevel": { "type": "number" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "fuelType", "capacity", "currentLevel"]
+    },
+    "FuelLog": {
+      "title": "Fuel Log",
+      "description": "Records of vehicle refueling",
+      "type": "object",
+      "properties": {
+        "vehicleId": { "type": "string" },
+        "driverId": { "type": "string" },
+        "fuelTankId": { "type": "string" },
+        "isExternal": { "type": "boolean" },
+        "location": { "type": "string" },
+        "quantity": { "type": "number" },
+        "arlaQuantity": { "type": "number" },
+        "arlaTankId": { "type": "string" },
+        "odometer": { "type": "number" },
+        "cost": { "type": "number" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["vehicleId", "quantity", "odometer", "timestamp"]
+    },
+    "MaintenanceLog": {
+      "title": "Maintenance Log",
+      "description": "Vehicle service and repair history",
+      "type": "object",
+      "properties": {
+        "vehicleId": { "type": "string" },
+        "description": { "type": "string" },
+        "type": { "type": "string", "enum": ["preventive", "corrective"] },
+        "status": { "type": "string", "enum": ["pending", "completed"] },
+        "cost": { "type": "number" },
+        "odometer": { "type": "number" },
+        "scheduledDate": { "type": "string", "format": "date" },
+        "completedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["vehicleId", "description", "type", "status"]
+    },
+    "StockItem": {
+      "title": "Stock Item",
+      "description": "Raw materials and parts",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "category": { "type": "string" },
+        "quantity": { "type": "number" },
+        "unit": { "type": "string" },
+        "minQuantity": { "type": "number" }
+      },
+      "required": ["name", "category", "quantity", "unit"]
+    },
+    "Checklist": {
+      "title": "Checklist",
+      "description": "Vehicle operational inspection checklist",
+      "type": "object",
+      "properties": {
+        "vehicleId": { "type": "string" },
+        "responsible": { "type": "string" },
+        "odometer": { "type": "number" },
+        "date": { "type": "string", "format": "date-time" },
+        "observations": { "type": "string" },
+        "items": { "type": "array" }
+      },
+      "required": ["vehicleId", "responsible", "odometer", "date", "items"]
+    },
+    "FuelEntry": {
+      "title": "Fuel Entry",
+      "description": "Records of fuel refills into storage tanks",
+      "type": "object",
+      "properties": {
+        "tankId": { "type": "string" },
+        "quantity": { "type": "number" },
+        "cost": { "type": "number" },
+        "supplier": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["tankId", "quantity", "cost", "timestamp"]
+    }
+  },
+  "firestore": {
+    "users": { "schema": "User", "description": "System users" },
+    "vehicles": { "schema": "Vehicle", "description": "Fleet vehicles" },
+    "employees": { "schema": "Employee", "description": "Staff members" },
+    "fuel_tanks": { "schema": "FuelTank", "description": "Fuel storage" },
+    "fuel_logs": { "schema": "FuelLog", "description": "Refueling history" },
+    "fuel_entries": { "schema": "FuelEntry", "description": "Tank refill history" },
+    "maintenance_logs": { "schema": "MaintenanceLog", "description": "Maintenance history" },
+    "stock_items": { "schema": "StockItem", "description": "General inventory" },
+    "checklists": { "schema": "Checklist", "description": "Operational inspections" }
+  }
+}
