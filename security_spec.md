@@ -1,24 +1,27 @@
-# Security Specification for DM Frotas
+# Security Specification - Gestão DM Turismo
 
 ## Data Invariants
-1. A Fuel Log must reference a valid Vehicle and significantly, the fuel quantity cannot exceed the Tank's capacity.
-2. Only Admins and Managers can modify Stocks and Employees.
-3. Drivers can only create Fuel Logs and view their own profile.
-4. Maintenance logs are critical for safety; their terminal state 'completed' locks the record (except for Admins).
+1. A **Trip** must have a valid `vehicleId`, `driverId`, and `status`. Only managers can create/delete trips. Drivers can only update status/notes of their assigned trips.
+2. **Financial Transactions** must have a valid `type`, `amount`, and `status`. Revisions are only allowed for managers.
+3. **Users** can self-register as 'driver' but cannot escalate their own role to 'manager' or 'admin'.
+4. **Vehicles** can be updated by drivers for odometer/status changes, but only managers can change core plate/model info.
 
-## The Dirty Dozen Payloads
-1. **Identity Spoofing**: Attempt to create a user profile for another UID.
-2. **Role Escalation**: A driver attempting to update their role to 'admin'.
-3. **Invalid Vehicle ID**: Creating a fuel log with a non-existent or malformed vehicle ID.
-4. **Massive Payload**: Attempting to injection 1MB of text into the 'model' field of a vehicle.
-5. **Ghost Fields**: Adding `isVerified: true` to a vehicle creation payload.
-6. **Negative Fuel**: Refueling -50 liters.
-7. **License Spoofing**: Setting a driver's license expiration date in the past during creation.
-8. **Invalid Status**: Setting vehicle status to 'on_the_moon'.
-9. **Unauthorized Stock Update**: A driver attempting to decrement stock items.
-10. **Orphaned Fuel Log**: Logging fuel for a vehicle that doesn't exist in the database.
-11. **Future Odometer**: Logging an odometer reading that is 1 million km ahead of current.
-12. **Admin Lockdown**: Attempting to delete the last admin user.
+## The Dirty Dozen Payloads (Target: Access Control & Integrity)
 
-## Test Runner (Draft)
-The tests will verify that all above payloads are rejected with PERMISSION_DENIED.
+1. **Self-Escalation**: Driver attempts to update their own role to 'admin'.
+2. **Ghost Trip**: Unauthorized user attempts to create a trip document.
+3. **Orphaned Transaction**: User attempts to create a financial transaction without required fields.
+4. **Identity Spoofing**: User A attempts to update a trip assigned to User B.
+5. **Unauthorized Trip Deletion**: Authenticated user (non-manager) attempts to delete a trip. (This is what we are fixing).
+6. **Price Tampering**: Driver attempts to update the 'amount' field of a financial transaction.
+7. **Plate Sabotage**: Driver attempts to update the license plate of a vehicle.
+8. **Invalid Status Injection**: User attempts to set a trip status to 'invalid_status'.
+9. **Bypassing Terminal State**: Manager attempts to update a completed maintenance log (unless admin).
+10. **Shadow Field Injection**: User attempts to add a 'isVerified: true' field to their user profile.
+11. **Resource Exhaustion**: User attempts to use a 1MB string for a plate number.
+12. **Unauthorized Message Deletion**: Non-manager attempts to delete a dashboard message.
+
+## Test Runner Logic
+Expected result for all the above: `PERMISSION_DENIED`.
+Specifically for #5: `deleteDoc(doc(db, 'trips', 'some-id'))` by a non-manager should fail.
+And #5 for a MANAGER should succeed (the fix).

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect, memo, useMemo } from 'react';
 import { 
   Bus, 
   Wrench, 
@@ -13,15 +13,17 @@ import {
   ClipboardCheck,
   CheckCircle2,
   AlertCircle,
-  Printer
+  Printer,
+  Share2,
+  Trash2
 } from 'lucide-react';
-import { Vehicle, MaintenanceLog, FuelLog, Checklist, Employee } from '../types';
+import { Vehicle, MaintenanceLog, FuelLog, Checklist, Employee, OperationType } from '../types';
 import { format, parseISO, startOfMonth, differenceInDays, isBefore } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { cn } from '../lib/utils';
-import { Modal } from './UI';
+import { Modal, ConfirmModal } from './UI';
 import { ChecklistForm } from './ChecklistDrawer';
-import { collection, addDoc, onSnapshot, query, where, orderBy } from 'firebase/firestore';
+import { collection, addDoc, onSnapshot, query, where, orderBy, doc, deleteDoc } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { toast } from 'sonner';
 import { 
@@ -50,15 +52,21 @@ interface VehicleDetailProps {
   employees: Employee[];
   onEdit: () => void;
   onPrintOS: (log: MaintenanceLog) => void;
+  onDelete?: () => void;
 }
 
-export const VehicleDetail = ({ vehicle, maintenanceHistory, fuelHistory, employees, onEdit, onPrintOS }: VehicleDetailProps) => {
-  const [activeTab, setActiveTab] = React.useState<'maintenance' | 'fuel' | 'charts' | 'checklists'>('checklists');
-  const [checklists, setChecklists] = React.useState<Checklist[]>([]);
-  const [isChecklistModalOpen, setIsChecklistModalOpen] = React.useState(false);
-  const [isSubmiting, setIsSubmiting] = React.useState(false);
+export const VehicleDetail = memo(({ vehicle, maintenanceHistory, fuelHistory, employees, onEdit, onPrintOS, onDelete }: VehicleDetailProps) => {
+  const [activeTab, setActiveTab] = useState<'maintenance' | 'fuel' | 'charts' | 'checklists'>('checklists');
+  const [checklists, setChecklists] = useState<Checklist[]>([]);
+  const [isChecklistModalOpen, setIsChecklistModalOpen] = useState(false);
+  const [isSubmiting, setIsSubmiting] = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState<{isOpen: boolean, id: string, type: 'vehicle' | 'fuel' | 'maintenance' | 'checklist'}>({
+    isOpen: false,
+    id: '',
+    type: 'fuel'
+  });
 
-  React.useEffect(() => {
+  useEffect(() => {
     const q = query(
       collection(db, 'checklists'),
       where('vehicleId', '==', vehicle.id),
@@ -75,6 +83,32 @@ export const VehicleDetail = ({ vehicle, maintenanceHistory, fuelHistory, employ
 
     return () => unsubscribe();
   }, [vehicle.id]);
+
+  const processDelete = async () => {
+    const { id, type } = deleteConfirm;
+    try {
+      if (type === 'vehicle') {
+        onDelete?.();
+      } else if (type === 'fuel') {
+        await deleteDoc(doc(db, 'fuel_logs', id));
+        toast.success('Abastecimento removido.');
+      } else if (type === 'maintenance') {
+        await deleteDoc(doc(db, 'maintenance_history', id));
+        toast.success('Manutenção removida.');
+      } else if (type === 'checklist') {
+        await deleteDoc(doc(db, 'checklists', id));
+        toast.success('Checklist removido.');
+      }
+    } catch (error) {
+      toast.error('Erro ao excluir item.');
+    } finally {
+      setDeleteConfirm(prev => ({ ...prev, isOpen: false }));
+    }
+  };
+
+  const handleDeleteChecklist = (id: string) => {
+    setDeleteConfirm({ isOpen: true, id, type: 'checklist' });
+  };
 
   const handleChecklistSubmit = async (data: any) => {
     setIsSubmiting(true);
@@ -93,6 +127,32 @@ export const VehicleDetail = ({ vehicle, maintenanceHistory, fuelHistory, employ
     }
   };
 
+  const handleShare = async () => {
+    const shareData = {
+      title: `Veículo DM Turismo: ${vehicle.plate}`,
+      text: `Veículo: ${vehicle.plate}\nModelo: ${vehicle.model}\nKM: ${vehicle.currentOdometer.toLocaleString()}\nStatus: ${vehicle.status === 'available' ? 'Operacional' : 'Em Manutenção'}`,
+      url: window.location.href,
+    };
+
+    if (navigator.share) {
+      try {
+        await navigator.share(shareData);
+      } catch (err) {
+        if (err instanceof Error && err.name !== 'AbortError') {
+          console.error('Erro ao compartilhar:', err);
+          toast.error('Erro ao compartilhar veículo.');
+        }
+      }
+    } else {
+      try {
+        await navigator.clipboard.writeText(`${shareData.text}\nLink: ${shareData.url}`);
+        toast.success('Detalhes copiados para a área de transferência!');
+      } catch (err) {
+        toast.error('Erro ao copiar dados do veículo.');
+      }
+    }
+  };
+
   const vehicleMaintenance = maintenanceHistory
     .filter(m => m.vehicleId === vehicle.id)
     .sort((a, b) => new Date(b.scheduledDate).getTime() - new Date(a.scheduledDate).getTime());
@@ -102,7 +162,7 @@ export const VehicleDetail = ({ vehicle, maintenanceHistory, fuelHistory, employ
     .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
 
   // Alerts logic
-  const alerts = React.useMemo(() => {
+  const alerts = useMemo(() => {
     const list = [];
     const today = new Date();
     const KM_THRESHOLD = 500;
@@ -206,13 +266,31 @@ export const VehicleDetail = ({ vehicle, maintenanceHistory, fuelHistory, employ
             </div>
           </div>
         </div>
-        <button 
-          onClick={onEdit}
-          className="flex items-center gap-2 px-6 py-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-xl font-black uppercase text-[10px] tracking-widest transition-all border border-zinc-700 hover:border-zinc-500"
-        >
-          <Edit3 size={16} />
-          Editar Cadastro
-        </button>
+        <div className="flex gap-3">
+          <button 
+            onClick={handleShare}
+            className="flex items-center gap-2 px-6 py-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-xl font-black uppercase text-[10px] tracking-widest transition-all border border-zinc-700 hover:border-zinc-500"
+          >
+            <Share2 size={16} />
+            Compartilhar
+          </button>
+          <button 
+            onClick={onEdit}
+            className="flex items-center gap-2 px-6 py-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-xl font-black uppercase text-[10px] tracking-widest transition-all border border-zinc-700 hover:border-zinc-500"
+          >
+            <Edit3 size={16} />
+            Editar Cadastro
+          </button>
+          {onDelete && (
+            <button 
+              onClick={() => setDeleteConfirm({ isOpen: true, id: vehicle.id, type: 'vehicle' })}
+              className="flex items-center gap-2 px-6 py-3 bg-rose-500/10 hover:bg-rose-500 text-rose-500 hover:text-white rounded-xl font-black uppercase text-[10px] tracking-widest transition-all border border-rose-500/30 shadow-xl"
+            >
+              <Trash2 size={16} />
+              Excluir
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Stats Grid */}
@@ -225,7 +303,7 @@ export const VehicleDetail = ({ vehicle, maintenanceHistory, fuelHistory, employ
         ].map((stat, i) => (
           <div key={i} className="p-4 bg-zinc-950 border border-zinc-800 rounded-2xl">
             <stat.icon size={16} className="text-zinc-600 mb-2" />
-            <p className="text-[9px] font-black text-zinc-500 uppercase tracking-widest">{stat.label}</p>
+            <p className="text-[9px] font-black text-zinc-400 uppercase tracking-widest">{stat.label}</p>
             <p className="text-sm font-black text-white tabular-nums">{stat.value}</p>
           </div>
         ))}
@@ -234,12 +312,12 @@ export const VehicleDetail = ({ vehicle, maintenanceHistory, fuelHistory, employ
       {/* Documentação */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <div className="p-6 bg-zinc-900 border border-zinc-800 rounded-2xl">
-          <div className="flex items-center gap-4 mb-4">
-            <Calendar size={18} className="text-zinc-500" />
+           <div className="flex items-center gap-4 mb-4">
+            <Calendar size={18} className="text-zinc-400" />
             <h3 className="text-xs font-black text-white uppercase tracking-widest">Licenciamento</h3>
           </div>
           <div className="flex justify-between items-center">
-            <span className="text-[10px] font-black text-zinc-500 uppercase tracking-widest">Data</span>
+            <span className="text-[10px] font-black text-zinc-400 uppercase tracking-widest">Data</span>
             <span className="text-sm font-black text-white">{vehicle.licenseExpiration ? format(parseISO(vehicle.licenseExpiration), 'dd/MM/yyyy') : '---'}</span>
           </div>
         </div>
@@ -270,20 +348,20 @@ export const VehicleDetail = ({ vehicle, maintenanceHistory, fuelHistory, employ
         <div className="flex items-center justify-between mb-8">
           <div>
             <h3 className="text-xl font-black text-white uppercase tracking-tighter">Histórico de Abastecimento</h3>
-            <p className="text-[10px] text-zinc-500 font-black uppercase tracking-widest mt-1">Detalhamento de consumo e custos por viagem</p>
+            <p className="text-[10px] text-zinc-400 font-black uppercase tracking-widest mt-1">Detalhamento de consumo e custos por viagem</p>
           </div>
-          <Fuel className="text-brand-accent/20" size={32} />
+          <Fuel className="text-brand-accent/30" size={32} />
         </div>
 
         <div className="overflow-x-auto">
           <table className="w-full text-left">
             <thead>
               <tr className="border-b border-zinc-800">
-                <th className="pb-4 text-[10px] font-black text-zinc-500 uppercase tracking-widest">Data / Hora</th>
-                <th className="pb-4 text-[10px] font-black text-zinc-500 uppercase tracking-widest">Motorista</th>
-                <th className="pb-4 text-[10px] font-black text-zinc-500 uppercase tracking-widest text-right">Qtd. (L)</th>
-                <th className="pb-4 text-[10px] font-black text-zinc-500 uppercase tracking-widest text-right">Custo (R$)</th>
-                <th className="pb-4 text-[10px] font-black text-zinc-500 uppercase tracking-widest text-right">Odômetro (KM)</th>
+                <th className="pb-4 text-[10px] font-black text-zinc-400 uppercase tracking-widest">Data / Hora</th>
+                <th className="pb-4 text-[10px] font-black text-zinc-400 uppercase tracking-widest">Motorista</th>
+                <th className="pb-4 text-[10px] font-black text-zinc-400 uppercase tracking-widest text-right">Qtd. (L)</th>
+                <th className="pb-4 text-[10px] font-black text-zinc-400 uppercase tracking-widest text-right">Custo (R$)</th>
+                <th className="pb-4 text-[10px] font-black text-zinc-400 uppercase tracking-widest text-right">Odômetro (KM)</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-zinc-800/50">
@@ -312,6 +390,14 @@ export const VehicleDetail = ({ vehicle, maintenanceHistory, fuelHistory, employ
                   </td>
                   <td className="py-4 text-[10px] font-black text-zinc-300 tabular-nums text-right">
                     {f.odometer.toLocaleString()}
+                  </td>
+                  <td className="py-4 pl-4 text-right">
+                    <button 
+                      onClick={() => setDeleteConfirm({ isOpen: true, id: f.id, type: 'fuel' })}
+                      className="p-2 text-zinc-700 hover:text-rose-500 transition-colors opacity-0 group-hover:opacity-100"
+                    >
+                      <Trash2 size={14} />
+                    </button>
                   </td>
                 </tr>
               )) : (
@@ -396,6 +482,13 @@ export const VehicleDetail = ({ vehicle, maintenanceHistory, fuelHistory, employ
                       >
                         <Printer size={14} />
                       </button>
+                      <button 
+                        onClick={() => setDeleteConfirm({ isOpen: true, id: m.id, type: 'maintenance' })}
+                        className="p-2 bg-zinc-800 hover:bg-rose-500 hover:text-white text-zinc-500 rounded-lg transition-all"
+                        title="Excluir Registro"
+                      >
+                        <Trash2 size={14} />
+                      </button>
                     </div>
                   </div>
                 )) : (
@@ -428,28 +521,39 @@ export const VehicleDetail = ({ vehicle, maintenanceHistory, fuelHistory, employ
                         <ClipboardCheck size={20} />
                       </div>
                       <div>
-                        <p className="text-xs font-black text-white uppercase">{c.responsible}</p>
-                        <p className="text-[9px] text-zinc-500 font-black uppercase mt-1">{format(parseISO(c.date), "dd 'de' MMMM 'às' HH:mm", { locale: ptBR })}</p>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-6">
-                      <div className="text-right">
-                        <p className="text-xs font-black text-white tabular-nums">{c.odometer.toLocaleString()} KM</p>
-                        <span className="text-[8px] text-zinc-600 font-black uppercase tracking-widest">Odômetro</span>
-                      </div>
-                      <div className="flex -space-x-1">
-                        {c.items.filter(i => i.status === 'issue').length > 0 ? (
-                          <div className="w-6 h-6 rounded-full bg-rose-500/20 flex items-center justify-center text-rose-500 border border-rose-500/30" title="Avarias encontradas">
-                            <AlertCircle size={12} />
-                          </div>
-                        ) : (
-                          <div className="w-6 h-6 rounded-full bg-emerald-500/20 flex items-center justify-center text-emerald-500 border border-emerald-500/30" title="Tudo OK">
-                            <CheckCircle2 size={12} />
-                          </div>
-                        )}
-                      </div>
+                        <span className="text-[10px] font-black text-white uppercase">{c.responsible}</span>
+                      <p className="text-[9px] text-zinc-500 font-black uppercase mt-1">{format(parseISO(c.date), "dd 'de' MMMM 'às' HH:mm", { locale: ptBR })}</p>
                     </div>
                   </div>
+                  <div className="flex items-center gap-6">
+                    <div className="text-right">
+                      <p className="text-xs font-black text-white tabular-nums">{c.odometer.toLocaleString()} KM</p>
+                      <span className="text-[8px] text-zinc-600 font-black uppercase tracking-widest">Odômetro</span>
+                    </div>
+                    <div className="flex items-center gap-4">
+                      {c.items.filter(i => i.status === 'issue').length > 0 ? (
+                        <div className="w-6 h-6 rounded-full bg-rose-500/20 flex items-center justify-center text-rose-500 border border-rose-500/30" title="Avarias encontradas">
+                          <AlertCircle size={12} />
+                        </div>
+                      ) : (
+                        <div className="w-6 h-6 rounded-full bg-emerald-500/20 flex items-center justify-center text-emerald-500 border border-emerald-500/30" title="Tudo OK">
+                          <CheckCircle2 size={12} />
+                        </div>
+                      )}
+                      
+                      <button 
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setDeleteConfirm({ isOpen: true, id: c.id, type: 'checklist' });
+                        }}
+                        className="p-2 text-zinc-600 hover:text-rose-500 transition-colors opacity-0 group-hover:opacity-100"
+                        title="Excluir Checklist"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  </div>
+                </div>
                 )) : (
                   <div className="p-16 text-center bg-zinc-950 rounded-3xl border border-dashed border-zinc-800">
                     <p className="text-[10px] font-black text-zinc-600 uppercase tracking-widest">Nenhuma vistoria realizada neste veículo</p>
@@ -561,6 +665,14 @@ export const VehicleDetail = ({ vehicle, maintenanceHistory, fuelHistory, employ
           loading={isSubmiting}
         />
       </Modal>
+
+      <ConfirmModal 
+        isOpen={deleteConfirm.isOpen}
+        onClose={() => setDeleteConfirm({ ...deleteConfirm, isOpen: false })}
+        onConfirm={processDelete}
+        title="Confirmar Exclusão"
+        message="Tem certeza que deseja excluir este item definitivamente? Esta ação não pode ser revertida."
+      />
     </div>
   );
-};
+});

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { ClipboardCheck, User, Gauge, CheckCircle2, AlertCircle, HelpCircle } from 'lucide-react';
 import { Button, Input } from './UI';
 import { CHECKLIST_ITEMS } from '../constants';
@@ -11,7 +11,7 @@ interface ChecklistFormProps {
 }
 
 export const ChecklistForm = ({ onSubmit, loading }: ChecklistFormProps) => {
-  const [items, setItems] = React.useState<ChecklistItem[]>(
+  const [items, setItems] = useState<ChecklistItem[]>(
     CHECKLIST_ITEMS.map((label, index) => ({
       id: index.toString(),
       label,

@@ -7,7 +7,7 @@
       "properties": {
         "email": { "type": "string", "format": "email" },
         "displayName": { "type": "string" },
-        "role": { "type": "string", "enum": ["admin", "manager", "driver"] },
+        "role": { "type": "string", "enum": ["admin", "manager", "driver", "Dono / Proprietário", "Gestor de Frotas", "Coordenador Logístico", "Administrativo", "Motorista", "Limpeza / Conservação"] },
         "photoURL": { "type": "string" },
         "createdAt": { "type": "string", "format": "date-time" }
       },
@@ -140,6 +140,226 @@
         "timestamp": { "type": "string", "format": "date-time" }
       },
       "required": ["tankId", "quantity", "cost", "timestamp"]
+    },
+    "FinancialTransaction": {
+      "title": "Financial Transaction",
+      "description": "Accounts payable and receivable records",
+      "type": "object",
+      "properties": {
+        "type": { "type": "string", "enum": ["payable", "receivable"] },
+        "category": { "type": "string" },
+        "description": { "type": "string" },
+        "amount": { "type": "number" },
+        "dueDate": { "type": "string", "format": "date" },
+        "paymentDate": { "type": "string", "format": "date" },
+        "status": { "type": "string", "enum": ["pending", "paid", "overdue"] },
+        "refId": { "type": "string" },
+        "refType": { "type": "string", "enum": ["maintenance", "trip", "fuel", "other"] },
+        "observations": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["type", "category", "description", "amount", "dueDate", "status", "createdAt"]
+    },
+    "Trip": {
+      "title": "Trip",
+      "description": "Vehicle trips and passenger services",
+      "type": "object",
+      "properties": {
+        "vehicleId": { "type": "string" },
+        "driverId": { "type": "string" },
+        "secondDriverId": { "type": "string" },
+        "title": { "type": "string" },
+        "origin": { "type": "string" },
+        "destination": { "type": "string" },
+        "stops": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "location": { "type": "string" },
+              "arrivalTime": { "type": "string", "format": "date-time" }
+            }
+          }
+        },
+        "tripType": { "type": "string", "enum": ["state", "interstate", "mercosur"] },
+        "status": { "type": "string", "enum": ["scheduled", "active", "completed", "cancelled"] },
+        "startDate": { "type": "string", "format": "date-time" },
+        "endDate": { "type": "string", "format": "date-time" },
+        "passengers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": { "type": "string" },
+              "document": { "type": "string" }
+            }
+          }
+        },
+        "passengerCount": { "type": "number" },
+        "documentation": { 
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "label": { "type": "string" },
+              "checked": { "type": "boolean" }
+            }
+          }
+        },
+        "attachments": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": { "type": "string" },
+              "url": { "type": "string" },
+              "type": { "type": "string", "enum": ["image", "pdf", "word", "excel"] }
+            }
+          }
+        },
+        "notes": { "type": "string" }
+      },
+      "required": ["vehicleId", "driverId", "title", "status", "startDate", "tripType"]
+    },
+    "Backup": {
+      "title": "Backup",
+      "description": "Database snapshots for recovery",
+      "type": "object",
+      "properties": {
+        "timestamp": { "type": "string", "format": "date-time" },
+        "createdBy": { "type": "string" },
+        "data": { "type": "object" },
+        "size": { "type": "number" }
+      },
+      "required": ["timestamp", "createdBy", "data", "size"]
+    },
+    "AuditLog": {
+      "title": "Audit Log",
+      "description": "Records of user actions for security and tracking",
+      "type": "object",
+      "properties": {
+        "timestamp": { "type": "string", "format": "date-time" },
+        "userId": { "type": "string" },
+        "userEmail": { "type": "string" },
+        "action": { "type": "string" },
+        "entityType": { "type": "string" },
+        "entityId": { "type": "string" },
+        "details": { "type": "string" }
+      },
+      "required": ["timestamp", "userId", "userEmail", "action", "entityType", "entityId"]
+    },
+    "DashboardMessage": {
+      "title": "Dashboard Message",
+      "description": "Messages posted on the community board",
+      "type": "object",
+      "properties": {
+        "text": { "type": "string" },
+        "sender": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["text", "sender", "timestamp"]
+    },
+    "DashboardSettings": {
+      "title": "Dashboard Settings",
+      "description": "Global settings for the dashboard",
+      "type": "object",
+      "properties": {
+        "message": { "type": "string" }
+      }
+    },
+    "MediaShare": {
+      "title": "Media Share",
+      "description": "Images and videos shared on the dashboard by management",
+      "type": "object",
+      "properties": {
+        "url": { "type": "string" },
+        "type": { "type": "string", "enum": ["image", "video"] },
+        "caption": { "type": "string" },
+        "ownerId": { "type": "string" },
+        "ownerName": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["url", "type", "ownerId", "ownerName", "createdAt"]
+    },
+    "NewsItem": {
+      "title": "News Item",
+      "description": "Important news and announcements for the fleet",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "content": { "type": "string" },
+        "imageUrl": { "type": "string" },
+        "authorId": { "type": "string" },
+        "authorName": { "type": "string" },
+        "isUrgent": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["title", "content", "authorId", "authorName", "createdAt"]
+    },
+    "Journey": {
+      "title": "Journey",
+      "description": "Employee work journey and shift tracking",
+      "type": "object",
+      "properties": {
+        "employeeId": { "type": "string" },
+        "employeeName": { "type": "string" },
+        "date": { "type": "string", "format": "date" },
+        "startTime": { "type": "string", "format": "date-time" },
+        "endTime": { "type": "string", "format": "date-time" },
+        "breaks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "start": { "type": "string", "format": "date-time" },
+              "end": { "type": "string", "format": "date-time" }
+            }
+          }
+        },
+        "status": { "type": "string", "enum": ["active", "on_break", "completed"] },
+        "totalMinutes": { "type": "number" },
+        "location": { "type": "object" }
+      },
+      "required": ["employeeId", "date", "startTime", "status"]
+    },
+    "CharteredRoute": {
+      "title": "Chartered Route",
+      "description": "Recurring fixed-route contracts (Fretados)",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "client": { "type": "string" },
+        "type": { "type": "string", "enum": ["factory", "school", "other"] },
+        "daysOfWeek": {
+          "type": "array",
+          "items": { "type": "number", "minimum": 0, "maximum": 6 }
+        },
+        "schedules": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "departureTime": { "type": "string" },
+              "returnTime": { "type": "string" }
+            }
+          }
+        },
+        "fixedVehicleId": { "type": "string" },
+        "fixedDriverId": { "type": "string" },
+        "passengers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": { "type": "string" },
+              "phone": { "type": "string" }
+            }
+          }
+        },
+        "status": { "type": "string", "enum": ["active", "inactive"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "client", "status"]
     }
   },
   "firestore": {
@@ -151,6 +371,16 @@
     "fuel_entries": { "schema": "FuelEntry", "description": "Tank refill history" },
     "maintenance_logs": { "schema": "MaintenanceLog", "description": "Maintenance history" },
     "stock_items": { "schema": "StockItem", "description": "General inventory" },
-    "checklists": { "schema": "Checklist", "description": "Operational inspections" }
+    "checklists": { "schema": "Checklist", "description": "Operational inspections" },
+    "financial_transactions": { "schema": "FinancialTransaction", "description": "Cash flow records" },
+    "trips": { "schema": "Trip", "description": "Trip and transit records" },
+    "backups": { "schema": "Backup", "description": "System database snapshots" },
+    "audit_logs": { "schema": "AuditLog", "description": "Security and activity tracking" },
+    "settings": { "schema": "DashboardSettings", "description": "Global application settings" },
+    "dashboard_messages": { "schema": "DashboardMessage", "description": "Messages on the dashboard notice board" },
+    "media_shares": { "schema": "MediaShare", "description": "Shared media (images/videos) for the community" },
+    "news_feed": { "schema": "NewsItem", "description": "Official news and announcements feed" },
+    "journeys": { "schema": "Journey", "description": "Employee time tracking logs" },
+    "chartered_routes": { "schema": "CharteredRoute", "description": "Fixed recurring route management" }
   }
 }

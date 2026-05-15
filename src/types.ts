@@ -1,4 +1,11 @@
-export type UserRole = 'admin' | 'manager' | 'driver';
+export type UserRole = 
+  | 'Dono / Proprietário' 
+  | 'Gestor de Frotas' 
+  | 'Coordenador Logístico' 
+  | 'Administrativo' 
+  | 'Motorista' 
+  | 'Limpeza / Conservação' 
+  | 'admin';
 
 export interface UserProfile {
   uid: string;
@@ -6,6 +13,7 @@ export interface UserProfile {
   displayName: string;
   role: UserRole;
   photoURL?: string;
+  permissions?: string[];
 }
 
 export interface Vehicle {
@@ -28,18 +36,38 @@ export interface Vehicle {
   updatedAt: string;
 }
 
+export interface FinancialTransaction {
+  id: string;
+  type: 'payable' | 'receivable';
+  category: string;
+  description: string;
+  amount: number;
+  dueDate: string;
+  paymentDate?: string;
+  status: 'pending' | 'paid' | 'overdue';
+  refId?: string;
+  refType?: 'maintenance' | 'trip' | 'fuel' | 'other';
+  observations?: string;
+  createdAt: string;
+}
+
 export interface Employee {
   id: string;
   name: string;
   role: string;
+  cpf?: string;
+  rg?: string;
   licenseNumber?: string;
   licenseCategory?: string;
   licenseExpiration?: string;
   phone: string;
   email: string;
+  password?: string;
   status: 'active' | 'inactive';
   birthDate?: string;
   admissionDate?: string;
+  photoUrl?: string;
+  permissions?: string[];
 }
 
 export interface FuelTank {
@@ -110,4 +138,57 @@ export interface Checklist {
   date: string;
   observations: string;
   items: ChecklistItem[];
+}
+
+export interface Passenger {
+  name: string;
+  document: string;
+}
+
+export interface Stop {
+  location: string;
+  arrivalTime: string;
+}
+
+export interface Trip {
+  id: string;
+  vehicleId: string;
+  driverId: string;
+  secondDriverId?: string;
+  title: string;
+  origin: string;
+  destination: string;
+  stops: Stop[];
+  tripType: 'state' | 'interstate' | 'mercosur';
+  status: 'scheduled' | 'active' | 'completed' | 'cancelled';
+  startDate: string;
+  endDate?: string;
+  passengers: Passenger[];
+  passengerCount?: number;
+  documentation: { label: string; checked: boolean }[];
+  attachments?: { name: string; url: string; type: 'image' | 'pdf' | 'word' | 'excel' }[];
+  notes?: string;
+  osNumber?: string;
+}
+
+export interface Journey {
+  id: string;
+  employeeId: string;
+  employeeName: string;
+  date: string;
+  startTime: string;
+  endTime?: string;
+  breaks: { start: string; end?: string }[];
+  status: 'active' | 'on_break' | 'completed';
+  totalMinutes?: number;
+  location?: { lat: number; lng: number };
+}
+
+export enum OperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write',
 }

@@ -11,13 +11,14 @@ export const Card = ({ children, className, ...props }: CardProps) => (
     initial={{ opacity: 0, y: 20 }}
     animate={{ opacity: 1, y: 0 }}
     whileHover={{ 
-      y: -4, 
-      transition: { duration: 0.2 } 
+      y: -8, 
+      transition: { duration: 0.3, ease: "easeOut" } 
     }}
     transition={{ type: "spring", stiffness: 260, damping: 20 }}
-    className={cn("rustic-card p-8 transition-all duration-300", className)} 
+    className={cn("glass-card p-8 transition-all duration-300 relative group", className)} 
     {...props}
   >
+    <div className="absolute inset-0 bg-gradient-to-br from-white/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity rounded-[2rem] pointer-events-none" />
     {children}
   </motion.div>
 );
@@ -32,19 +33,19 @@ interface StatCardProps {
 }
 
 export const StatCard = ({ title, value, icon: Icon, trend, color, glow }: StatCardProps) => (
-  <Card className={cn("flex flex-col gap-6 border-zinc-800", glow)}>
-    <div className={cn("w-12 h-12 rounded-xl flex items-center justify-center shadow-lg transform -rotate-2", color)}>
-      <Icon className="w-6 h-6 text-white" />
+  <Card className={cn("flex flex-col gap-8 border-white/5", glow)}>
+    <div className={cn("w-14 h-14 rounded-2xl flex items-center justify-center shadow-2xl transform -rotate-3 transition-transform group-hover:rotate-0", color)}>
+      <Icon className="w-7 h-7 text-asphalt-950" strokeWidth={2.5} />
     </div>
     <div>
-      <p className="text-[10px] font-black text-zinc-500 uppercase tracking-[0.2em] mb-2">{title}</p>
-      <h3 className="text-3xl font-black text-white tracking-tight mb-2 tabular-nums">{value}</h3>
+      <p className="text-[10px] font-black text-sky-blue uppercase tracking-[0.25em] mb-3 opacity-80">{title}</p>
+      <h3 className="text-4xl font-black text-white tracking-tighter mb-4 tabular-nums font-display">{value}</h3>
       {trend && (
-        <div className="flex items-center gap-2">
-          <div className="flex items-center px-1.5 py-0.5 bg-zinc-800 rounded border border-zinc-700">
-            <span className={cn("text-[9px] font-bold", trend.startsWith('+') ? "text-emerald-500" : "text-brand-accent")}>{trend}</span>
+        <div className="flex items-center gap-3">
+          <div className="flex items-center px-2 py-1 bg-asphalt-950/50 rounded-lg border border-white/5">
+            <span className={cn("text-[10px] font-black tracking-widest", trend.startsWith('+') || trend.includes('operação') || trend.includes('curso') ? "text-emerald-500" : "text-brand-accent")}>{trend}</span>
           </div>
-          <span className="text-[9px] text-zinc-500 font-medium uppercase tracking-wider">Indicador</span>
+          <span className="text-[9px] text-zinc-500 font-bold uppercase tracking-widest opacity-50">Trend</span>
         </div>
       )}
     </div>

@@ -2,37 +2,71 @@
 @import "tailwindcss";
 
 @theme {
-  --font-sans: "Outfit", "Inter", ui-sans-serif, system-ui, sans-serif;
-  --color-brand-accent: #f59e0b; /* Amber/Rustic */
-  --color-brand-dark: #0f172a;
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Outfit", sans-serif;
+  --color-brand-accent: #ff6b00; 
+  --color-horizon-gold: #FFD700;
+  --color-sky-blue: #0ea5e9;
+  --color-travel-navy: #080a14;
   
-  /* Rustic Dark Palette */
-  --color-zinc-950: #09090b;
-  --color-zinc-900: #18181b;
-  --color-zinc-800: #27272a;
-  --color-zinc-700: #3f3f46;
+  /* Travel Theme Palette */
+  --color-asphalt-950: #05070a;
+  --color-asphalt-900: #0c1016;
+  --color-asphalt-800: #161c24;
+  --color-asphalt-700: #212936;
 }
 
 @layer base {
   body {
-    @apply bg-zinc-950 text-zinc-100 min-h-screen overflow-x-hidden;
+    @apply bg-asphalt-950 text-slate-100 min-h-screen overflow-x-hidden;
   }
 }
 
-.bg-rustic-gradient {
+.travel-gradient {
   background: 
-    radial-gradient(at 0% 0%, rgba(245, 158, 11, 0.05) 0px, transparent 50%),
-    radial-gradient(at 100% 100%, rgba(39, 39, 42, 0.2) 0px, transparent 50%);
+    radial-gradient(circle at 0% 0%, rgba(255, 107, 0, 0.05) 0%, transparent 50%),
+    radial-gradient(circle at 100% 100%, rgba(14, 165, 233, 0.05) 0%, transparent 50%),
+    linear-gradient(rgba(5, 7, 10, 0.92), rgba(5, 7, 10, 0.98)),
+    url('https://images.unsplash.com/photo-1544620347-c4fd4a3d5957?auto=format&fit=crop&q=80&w=2069'); 
   background-attachment: fixed;
+  background-size: cover;
+  background-position: center;
 }
 
-.rustic-card {
-  @apply bg-zinc-900/50 backdrop-blur-xl border border-zinc-800/50 rounded-2xl shadow-2xl;
+.glass-card {
+  @apply bg-asphalt-900/40 backdrop-blur-2xl border border-white/5 rounded-3xl shadow-2xl;
+  position: relative;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-.rustic-border {
-  @apply border-zinc-800;
+.glass-card:hover {
+  @apply border-white/10 bg-asphalt-900/60;
+  box-shadow: 0 0 40px rgba(0, 0, 0, 0.4), 0 0 20px rgba(255, 107, 0, 0.05);
 }
 
-.glow-amber { box-shadow: 0 0 30px rgba(245, 158, 11, 0.1); }
+.glass-card::before {
+  content: '';
+  @apply absolute -top-[1px] -left-[1px] -right-[1px] h-[1px] rounded-t-3xl bg-gradient-to-r from-transparent via-white/10 to-transparent;
+}
+
+.map-pattern {
+  mask-image: radial-gradient(circle at center, black, transparent);
+  background-image: url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%23ffffff' fill-opacity='0.02'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6zM36 4V0h-2v4h-4v2h4v4h2V6h4V4h-4z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E");
+}
+
+.travel-button {
+  @apply relative overflow-hidden transition-all duration-300 active:scale-95 disabled:opacity-50;
+}
+
+.travel-button::after {
+  content: '';
+  @apply absolute inset-0 bg-white/20 translate-y-full transition-transform duration-300;
+}
+
+.travel-button:hover::after {
+  @apply translate-y-0;
+}
+
+.glow-brand { box-shadow: 0 0 30px rgba(255, 107, 0, 0.15); }
+.glow-sky { box-shadow: 0 0 30px rgba(14, 165, 233, 0.15); }
 

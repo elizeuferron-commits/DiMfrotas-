@@ -7,60 +7,144 @@ service cloud.firestore {
     }
 
     // --- Helpers ---
-    function isSignedIn() { return request.auth != null && request.auth.token.email_verified == true; }
+    function isSignedIn() { return request.auth != null; }
+    
     function isAdmin() { 
       return isSignedIn() && (
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
-        request.auth.token.email == 'elizeuferron@gmail.com'
+        request.auth.token.email == 'elizeuferron@gmail.com' ||
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'
       ); 
     }
+    
     function isManager() { 
       return isAdmin() || (isSignedIn() && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'manager'); 
     }
+    
     function isOwner(userId) { return isSignedIn() && request.auth.uid == userId; }
     function incoming() { return request.resource.data; }
     function existing() { return resource.data; }
     function isValidId(id) { return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$'); }
-    function isStrictTimestamp(ts) { return ts == request.time; }
-
-    // --- Validation Helpers ---
+    
+    // --- Validation Blueprints ---
+    
     function isValidUser(data) {
       return data.email is string && data.email.size() <= 100 &&
-             data.role in ['admin', 'manager', 'driver'] &&
-             (data.get('displayName', '') is string) &&
-             (data.get('photoURL', '') is string);
+             data.role in ['admin', 'manager', 'driver', 'Dono / Proprietário', 'Gestor de Frotas', 'Coordenador Logístico', 'Administrativo', 'Motorista', 'Limpeza / Conservação', 'Visitante'] &&
+             (data.get('displayName', '') is string && data.get('displayName', '').size() <= 100) &&
+             (data.get('photoURL', '') is string && data.get('photoURL', '').size() <= 600);
     }
 
     function isValidVehicle(data) {
       return data.plate is string && data.plate.size() <= 10 &&
              data.model is string && data.model.size() <= 100 &&
-             (data.get('factoryYear', '') is string) &&
              data.type in ['van', 'bus'] &&
              data.capacity is number &&
              data.currentOdometer is number &&
              data.status in ['available', 'maintenance', 'trip'] &&
-             (data.get('licenseExpiration', '') is string) &&
-             (data.get('tourismLicenseExpiration', '') is string) &&
-             (data.get('insuranceExpiration', '') is string) &&
              (data.get('updatedAt', '') is string);
     }
 
-    function isValidChecklist(data) {
-      return data.vehicleId is string &&
-             data.responsible is string &&
-             data.odometer is number &&
-             data.date is string &&
-             data.items is list;
+    function isValidFinancial(data) {
+      return data.type in ['payable', 'receivable'] &&
+             data.category is string && data.category.size() <= 50 &&
+             data.description is string && data.description.size() <= 200 &&
+             data.amount is number &&
+             data.dueDate is string &&
+             data.status in ['pending', 'paid', 'overdue'] &&
+             data.createdAt is string;
+    }
+
+    function isValidTrip(data) {
+      return data.vehicleId is string && isValidId(data.vehicleId) &&
+             data.driverId is string && isValidId(data.driverId) &&
+             data.title is string && data.title.size() <= 100 &&
+             data.status in ['scheduled', 'active', 'completed', 'cancelled'] &&
+             data.startDate is string &&
+             data.tripType in ['state', 'interstate', 'mercosur'];
+    }
+
+    function isValidDashboardMessage(data) {
+      return data.text is string && data.text.size() <= 1000 &&
+             data.sender is string && data.sender.size() <= 100 &&
+             data.timestamp is timestamp;
+    }
+
+    function isValidStockItem(data) {
+      return data.name is string && data.name.size() <= 100 &&
+             data.category is string && data.category.size() <= 50 &&
+             data.quantity is number &&
+             data.unit is string && data.unit.size() <= 20;
+    }
+
+    function isValidFuelEntry(data) {
+      return data.tankId is string && isValidId(data.tankId) &&
+             data.quantity is number &&
+             data.cost is number &&
+             data.timestamp is string;
+    }
+
+    function isValidMediaShare(data) {
+      return data.url is string && data.url.size() <= 1000 &&
+             data.type in ['image', 'video'] &&
+             data.ownerId == request.auth.uid &&
+             data.ownerName is string &&
+             (data.createdAt is string || data.createdAt is timestamp);
+    }
+
+    function isValidNewsItem(data) {
+      return data.title is string && data.title.size() <= 200 &&
+             data.content is string && data.content.size() <= 5000 &&
+             data.authorId == request.auth.uid &&
+             data.authorName is string &&
+             (data.createdAt is string || data.createdAt is timestamp);
+    }
+
+    function isValidJourney(data) {
+      return data.employeeId is string && isValidId(data.employeeId) &&
+             data.status in ['active', 'on_break', 'completed'] &&
+             data.startTime is string &&
+             data.date is string;
+    }
+
+    function isValidCharteredRoute(data) {
+      return data.name is string && data.name.size() <= 100 &&
+             data.client is string && data.client.size() <= 100 &&
+             data.status in ['active', 'inactive'];
+    }
+
+    function isAdministrative() {
+      return isSignedIn() && (
+        request.auth.token.email == 'elizeuferron@gmail.com' ||
+        isAdmin() || 
+        isManager() || 
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['Dono / Proprietário', 'Gestor de Frotas', 'Coordenador Logístico', 'Administrativo'])
+      );
     }
 
     // --- Collection Routes ---
 
+    match /settings/{docId} {
+      allow read: if isSignedIn();
+      allow write: if isManager();
+    }
+
+    match /dashboard_messages/{msgId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && isValidDashboardMessage(incoming());
+      allow update, delete: if isManager();
+    }
+
     match /users/{userId} {
       allow get: if isSignedIn();
       allow list: if isManager();
-      allow create: if isOwner(userId) && isValidUser(incoming()) && incoming().role == 'driver'; // Self-registration as driver
-      allow update: if (isOwner(userId) || isAdmin()) && isValidUser(incoming()) &&
-                    (isAdmin() || (incoming().role == existing().role)); // Only admin can change roles
+      allow create: if isOwner(userId) && isValidUser(incoming()) && (
+        incoming().role == 'Motorista' || 
+        incoming().role == 'driver' ||
+        request.auth.token.email == 'elizeuferron@gmail.com'
+      );
+      allow update: if (isOwner(userId) || isAdmin()) && isValidUser(incoming()) && (
+        isAdmin() || (incoming().role == existing().role)
+      );
     }
 
     match /vehicles/{vehicleId} {
@@ -69,51 +153,104 @@ service cloud.firestore {
       allow update: if isSignedIn() && isValidVehicle(incoming()) && (
         isManager() || (incoming().diff(existing()).affectedKeys().hasOnly(['currentOdometer', 'updatedAt', 'status']))
       );
+      allow delete: if isAdmin();
     }
 
     match /employees/{employeeId} {
-      allow read: if isSignedIn();
-      allow write: if isAdmin();
+      allow read: if true;
+      allow create: if isAdmin() && isValidId(employeeId);
+      allow update: if isAdmin();
+      allow delete: if isAdmin();
     }
 
     match /fuel_tanks/{tankId} {
       allow read: if isSignedIn();
+      allow create: if isManager();
       allow update: if isSignedIn() && (
         isManager() || (incoming().diff(existing()).affectedKeys().hasOnly(['currentLevel', 'updatedAt']))
       );
-      allow write: if isManager();
+      allow delete: if isAdmin();
     }
 
     match /fuel_logs/{logId} {
       allow read: if isSignedIn();
-      allow create: if isSignedIn() && 
-                    isValidId(incoming().vehicleId) && 
-                    exists(/databases/$(database)/documents/vehicles/$(incoming().vehicleId));
+      allow create: if isSignedIn() && exists(/databases/$(database)/documents/vehicles/$(incoming().vehicleId));
+      allow delete: if isManager();
     }
 
     match /fuel_entries/{entryId} {
       allow read: if isSignedIn();
-      allow create: if isManager() && 
-                    isValidId(incoming().tankId) && 
-                    exists(/databases/$(database)/documents/fuel_tanks/$(incoming().tankId));
+      allow create: if isManager() && isValidFuelEntry(incoming());
+      allow delete: if isAdmin();
     }
 
     match /maintenance_logs/{logId} {
       allow read: if isSignedIn();
       allow create: if isManager();
       allow update: if isManager() && (existing().status != 'completed' || isAdmin());
+      allow delete: if isManager();
     }
 
-    match /stock_items/{itemId} {
+    match /financial_transactions/{transactionId} {
       allow read: if isSignedIn();
-      allow write: if isManager();
+      allow create, update: if isManager() && isValidFinancial(incoming());
+      allow delete: if isManager();
+    }
+
+    match /trips/{tripId} {
+      allow read: if isSignedIn();
+      allow create: if isManager() && isValidTrip(incoming());
+      allow update: if isSignedIn() && isValidTrip(incoming()) && (
+        isManager() || (
+          existing().driverId == request.auth.uid && 
+          incoming().diff(existing()).affectedKeys().hasOnly(['status', 'endDate', 'notes'])
+        )
+      );
+      allow delete: if isManager();
+    }
+
+    match /audit_logs/{logId} {
+      allow create: if isSignedIn();
+      allow read: if isAdmin();
     }
 
     match /checklists/{checklistId} {
       allow read: if isSignedIn();
-      allow create: if isSignedIn() && 
-                    isValidChecklist(incoming()) && 
-                    exists(/databases/$(database)/documents/vehicles/$(incoming().vehicleId));
+      allow create: if isSignedIn() && exists(/databases/$(database)/documents/vehicles/$(incoming().vehicleId));
+    }
+
+    match /stock_items/{itemId} {
+      allow read: if isSignedIn();
+      allow create: if isManager() && isValidStockItem(incoming());
+      allow update: if isManager() && isValidStockItem(incoming());
+      allow delete: if isAdmin();
+    }
+    
+    match /media_shares/{shareId} {
+      allow read: if isSignedIn();
+      allow create: if isAdministrative() && isValidMediaShare(incoming());
+      allow delete: if isAdministrative() || (isSignedIn() && existing().ownerId == request.auth.uid);
+    }
+
+    match /news_feed/{newsId} {
+      allow read: if isSignedIn();
+      allow create, update: if isAdministrative() && isValidNewsItem(incoming());
+      allow delete: if isAdministrative() || (isSignedIn() && existing().authorId == request.auth.uid);
+    }
+
+    match /journeys/{journeyId} {
+      allow read: if isSignedIn();
+      allow create, update: if isSignedIn() && (isAdministrative() || incoming().employeeId == request.auth.uid) && isValidJourney(incoming());
+      allow delete: if isAdmin();
+    }
+
+    match /chartered_routes/{routeId} {
+      allow read: if isSignedIn();
+      allow create, update, delete: if isAdministrative() && isValidCharteredRoute(incoming());
+    }
+    
+    match /backups/{backupId} {
+      allow read, write: if isSignedIn() && request.auth.token.email == 'elizeuferron@gmail.com';
     }
   }
 }

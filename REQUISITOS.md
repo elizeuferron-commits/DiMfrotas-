@@ -1,4 +1,4 @@
-# DM Frotas - Documento de Requisitos (PRD)
+# DM Turismo - Documento de Requisitos (PRD)
 
 ## 1. Visão Geral
 Sistema de gestão para empresas de turismo e fretamento, focado em Vans e Ônibus, visando controle total de frota, manutenção, funcionários e estoque próprio.
