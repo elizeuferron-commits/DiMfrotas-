@@ -6,6 +6,10 @@ Este arquivo registra o progresso das funcionalidades em desenvolvimento paralel
 - [ ] *Nenhuma funcionalidade pendente no Modo Sombra.*
 
 ## 🔄 Histórico de Sincronização
+- **2026-05-16 (PRO)**: **Sistema de Logins & Gestão de Acessos**: Integrado sistema de autenticação via Firebase (E-mail/Senha e Google) com portal administrativo para Elizeu Ferron gerir permissões de colaboradores.
+- **2026-05-16 (PRO)**: **Preparação Android & Mobile Core**: Adicionada plataforma nativa Android via Capacitor, verificada compatibilidade de SDK (API 36) e configurado ambiente para build final em Android Studio.
+- **2026-05-16 (PRO)**: **Refatoração de Navegação (HashRouter)**: Implementado sistema de roteamento baseado em URL para permitir navegação direta, suporte ao botão "voltar" do navegador e troca de seções sem recarregamento (SPA).
+- **2026-05-16 (PRO)**: **Lançamento v0.2.1**: Implementada auditoria financeira de manutenção (custos e datas de conclusão) e ecossistema de compartilhamento APK v2.
 - **2026-05-15 (PRO)**: **Lançamento v0.2.0**: Unificação do ecossistema APK Digital, Modo Offline (PWA), Sincronização Excel Staff e Consultor Gemini Flash 3.0.
 - **2026-05-15**: **Backup para Google Drive**: Adicionada ferramenta que gera um instalador portátil (.html) estruturado para ser armazenado e distribuído via Drive, garantindo acesso universal ao ecossistema DM.
 - **2026-05-15**: **Relatórios em Excel (Staff)**: Implementada exportação de fichas individuais e lista completa da equipe para formato .xlsx.

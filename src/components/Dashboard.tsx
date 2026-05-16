@@ -23,7 +23,9 @@ import {
   Trash2,
   Facebook,
   Instagram,
-  Ghost
+  Ghost,
+  Bot as BotIcon,
+  Smartphone,
 } from 'lucide-react';
 import { motion } from 'motion/react';
 import { format, isAfter, isBefore, parseISO, addDays, differenceInDays, isSameDay } from 'date-fns';
@@ -35,6 +37,7 @@ import { ConfirmModal } from './UI';
 import { collection, query, onSnapshot, doc, setDoc, serverTimestamp, orderBy, limit, where, deleteDoc } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { toast } from 'sonner';
+import { generateAPKDigital, shareAppDirectly } from '../services/apkService';
 
 interface DashboardProps {
   vehicles: Vehicle[];
@@ -45,6 +48,7 @@ interface DashboardProps {
   user: any;
   setActiveSection: (id: string) => void;
   onViewTrip: (trip: Trip) => void;
+  onShowInstall?: () => void;
   onUpdateEmployeePhoto?: (id: string, photoUrl: string) => Promise<void>;
 }
 
@@ -57,6 +61,7 @@ export const Dashboard = ({
   user,
   setActiveSection,
   onViewTrip,
+  onShowInstall,
   onUpdateEmployeePhoto
 }: DashboardProps) => {
   const [boardMessage, setBoardMessage] = useState('');
@@ -79,6 +84,15 @@ export const Dashboard = ({
   });
   
   const today = new Date();
+
+  const [currentTime, setCurrentTime] = useState(new Date());
+  
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setCurrentTime(new Date());
+    }, 1000);
+    return () => clearInterval(timer);
+  }, []);
 
   const isAdministrative = user?.role === 'Dono / Proprietário' || 
                           user?.role === 'Administrativo' || 
@@ -568,9 +582,22 @@ export const Dashboard = ({
             <h1 className="text-4xl md:text-6xl font-black text-white uppercase tracking-tighter font-display leading-none">
               BEM-VINDO, <span className="text-brand-accent italic">{user?.displayName?.split(' ')[0] || 'GESTOR'}</span>
             </h1>
-            <p className="text-zinc-500 font-black uppercase tracking-[0.4em] text-[10px] opacity-70">
-              {format(new Date(), "EEEE, dd 'de' MMMM 'de' yyyy", { locale: ptBR })}
-            </p>
+            <div className="flex flex-col md:flex-row md:items-center gap-2 md:gap-8 pt-2">
+              <p className="text-zinc-500 font-black uppercase tracking-[0.4em] text-[10px] opacity-70">
+                {format(currentTime, "EEEE, dd 'de' MMMM 'de' yyyy", { locale: ptBR })}
+              </p>
+              <div className="flex items-center gap-3 bg-zinc-950/50 px-4 py-2 rounded-2xl border border-white/5 backdrop-blur-md">
+                <Clock size={14} className="text-brand-accent animate-pulse" />
+                <div className="flex items-baseline gap-1">
+                  <span className="text-2xl font-black text-white tabular-nums tracking-tighter">
+                    {format(currentTime, "HH:mm")}
+                  </span>
+                  <span className="text-[10px] font-black text-brand-accent tabular-nums uppercase">
+                    {format(currentTime, "ss")}
+                  </span>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
         
@@ -584,6 +611,21 @@ export const Dashboard = ({
                 <p className="text-sm font-black text-white uppercase tracking-tight">{vehicles.length} Veículos Ativos</p>
              </div>
           </div>
+
+          {onShowInstall && (
+            <button 
+              onClick={onShowInstall}
+              className="flex items-center gap-4 bg-zinc-900 hover:bg-zinc-800 text-white p-5 rounded-[1.5rem] shadow-2xl transition-all hover:scale-105 active:scale-95 group/help border border-white/5"
+            >
+               <div className="w-12 h-12 bg-white/5 rounded-xl flex items-center justify-center border border-white/10 text-brand-accent">
+                  <BotIcon size={24} className="group-hover/help:animate-bounce" />
+               </div>
+               <div className="text-left">
+                  <p className="text-[10px] font-black uppercase tracking-widest leading-none mb-1">Ajuda Fácil</p>
+                  <p className="text-sm font-black uppercase tracking-tight">Como Instalar?</p>
+               </div>
+            </button>
+          )}
         </div>
       </div>
 

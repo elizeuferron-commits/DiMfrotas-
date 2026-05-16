@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { 
-  Bot, 
+  Bot as BotIcon, 
   Send, 
   Sparkles, 
   Mic, 
@@ -116,7 +116,7 @@ export const AIConsultant: React.FC = () => {
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-4">
           <div className="w-12 h-12 bg-brand-accent/10 border border-brand-accent/20 rounded-2xl flex items-center justify-center shadow-[0_0_20px_rgba(255,107,0,0.1)]">
-            <Bot className="text-brand-accent w-6 h-6" />
+            <BotIcon className="text-brand-accent w-6 h-6" />
           </div>
           <div>
             <h2 className="text-xl font-black text-white uppercase tracking-tighter italic">
@@ -178,7 +178,7 @@ export const AIConsultant: React.FC = () => {
                 "w-10 h-10 rounded-xl flex items-center justify-center shrink-0 shadow-lg",
                 msg.role === 'ai' ? "bg-brand-accent text-zinc-950" : "bg-zinc-800 text-white border border-zinc-700"
               )}>
-                {msg.role === 'ai' ? <Bot size={20} /> : <User size={20} />}
+                {msg.role === 'ai' ? <BotIcon size={20} /> : <User size={20} />}
               </div>
               <div className={cn(
                 "p-5 rounded-3xl text-xs md:text-sm leading-relaxed",
@@ -202,7 +202,7 @@ export const AIConsultant: React.FC = () => {
           {isLoading && (
             <div className="flex gap-4">
               <div className="w-10 h-10 rounded-xl bg-brand-accent text-zinc-950 flex items-center justify-center animate-pulse">
-                <Bot size={20} />
+                <BotIcon size={20} />
               </div>
               <div className="bg-zinc-800/80 p-5 rounded-3xl rounded-tl-none flex gap-1.5 items-center border border-zinc-700">
                 <div className="w-1.5 h-1.5 bg-brand-accent rounded-full animate-bounce" />

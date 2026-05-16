@@ -5,6 +5,7 @@ export type UserRole =
   | 'Administrativo' 
   | 'Motorista' 
   | 'Limpeza / Conservação' 
+  | 'Visitante'
   | 'admin';
 
 export interface UserProfile {

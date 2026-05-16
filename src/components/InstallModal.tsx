@@ -62,12 +62,12 @@ export const InstallModal = ({ isOpen, onClose, onInstall, isInstallable }: Inst
             {/* Header */}
             <div className="p-8 pb-4 flex items-center justify-between border-b border-zinc-800/50">
               <div className="flex items-center gap-4">
-                <div className="w-12 h-12 bg-brand-accent/10 rounded-2xl flex items-center justify-center border border-brand-accent/20">
-                  <SmartphoneIcon className="text-brand-accent" size={24} />
+                <div className="w-16 h-16 bg-brand-accent rounded-2xl flex items-center justify-center border border-brand-accent/20 shadow-[0_0_20px_rgba(255,107,0,0.3)] transform rotate-3">
+                   <span className="text-zinc-950 font-black text-2xl">DM</span>
                 </div>
                 <div>
                   <h3 className="text-xl font-black text-white uppercase tracking-tighter">Instalar App Pro</h3>
-                  <p className="text-[10px] font-black text-brand-accent uppercase tracking-[0.2em] mt-1">Terminal Executável (APK Mode)</p>
+                  <p className="text-[10px] font-black text-brand-accent uppercase tracking-[0.2em] mt-1">Terminal Executável (Mobile Mode)</p>
                 </div>
               </div>
               <button 
@@ -82,97 +82,58 @@ export const InstallModal = ({ isOpen, onClose, onInstall, isInstallable }: Inst
             <div className="p-8 space-y-6">
               {/* Context Summary */}
               <div className="bg-brand-accent/5 p-4 rounded-2xl border border-brand-accent/10">
-                <p className="text-[10px] font-medium text-brand-accent uppercase tracking-widest text-center leading-relaxed">
-                  Transforme o sistema em um aplicativo nativo no seu dispositivo. 
-                  Sem barra de endereço, com ícone na tela e inicialização instantânea.
+                <p className="text-[10px] font-bold text-brand-accent uppercase tracking-widest text-center leading-relaxed">
+                  Para facilitar o seu dia, coloque o ícone da DM na tela do seu celular. Ver as viagens será muito mais rápido!
                 </p>
               </div>
 
-              {/* Option 1: Native Installation */}
-              {isInstallable ? (
-                <div className="bg-zinc-800/50 p-6 rounded-3xl border border-zinc-700/50 space-y-4">
-                  <div className="flex items-center gap-3">
-                    <CheckCircle2 className="text-emerald-500" size={20} />
-                    <span className="text-sm font-black text-white uppercase tracking-wider">Instalação Direta</span>
-                  </div>
-                  <p className="text-zinc-400 text-xs font-medium leading-relaxed">
-                    Seu sistema operacional suporta a instalação direta como Aplicativo Executável (Versão APK Digital).
-                  </p>
+              {/* Step by Step - Simple Mode */}
+              <div className="space-y-4">
+                <div className="flex items-center gap-3 border-b border-zinc-800 pb-2">
+                   <div className="w-6 h-6 bg-brand-accent text-zinc-950 rounded-full flex items-center justify-center font-black text-xs">1</div>
+                   <p className="text-sm font-black text-white uppercase tracking-tight">Abra este link no seu celular</p>
+                </div>
+
+                <div className="flex items-center gap-3 border-b border-zinc-800 pb-2">
+                   <div className="w-6 h-6 bg-brand-accent text-zinc-950 rounded-full flex items-center justify-center font-black text-xs">2</div>
+                   <p className="text-sm font-black text-white uppercase tracking-tight">
+                     {isIOS ? 'Toque no botão de "Compartilhar" (quadrado com seta)' : 'Toque nos "3 pontinhos" lá em cima'}
+                   </p>
+                </div>
+
+                <div className="flex items-center gap-3 border-b border-zinc-800 pb-2">
+                   <div className="w-6 h-6 bg-brand-accent text-zinc-950 rounded-full flex items-center justify-center font-black text-xs">3</div>
+                   <p className="text-sm font-black text-white uppercase tracking-tight italic">
+                     {isIOS ? 'Clique em "Tela de Início"' : 'Clique em "Instalar Aplicativo"'}
+                   </p>
+                </div>
+
+                <div className="flex items-center gap-3">
+                   <div className="w-6 h-6 bg-emerald-500 text-zinc-950 rounded-full flex items-center justify-center font-black text-xs">OK</div>
+                   <p className="text-sm font-black text-white uppercase tracking-tight">Pronto! O ícone vai aparecer no seu celular.</p>
+                </div>
+              </div>
+
+              {/* Action Button for those who can */}
+              {isInstallable && (
+                <div className="pt-4">
                   <Button onClick={onInstall} className="bg-white text-zinc-950 w-full flex items-center justify-center gap-3 py-6 rounded-2xl group transition-all active:scale-95 shadow-xl hover:shadow-white/5">
                     <Download size={20} className="group-hover:animate-bounce" />
-                    <span className="text-sm font-black uppercase">Baixar e Instalar APK Digital</span>
+                    <span className="text-sm font-black uppercase">Instalar Agora (Clique Aqui)</span>
                   </Button>
                 </div>
-              ) : (
-                <div className="space-y-6">
-                  {/* Option: Mobile Instructions */}
-                  <div className="bg-zinc-800/50 p-6 rounded-3xl border border-zinc-700/50">
-                    <div className="flex items-center justify-between mb-4">
-                      <h4 className="text-xs font-black text-zinc-300 uppercase tracking-widest flex items-center gap-2">
-                        {isIOS ? <Apple size={16} /> : <Smartphone size={16} />}
-                        {isIOS ? 'iPhone / iPad (App Store)' : 'Android (APK Digital)'}
-                      </h4>
-                      <span className="px-2 py-0.5 bg-brand-accent/10 text-[8px] font-black text-brand-accent rounded uppercase">Passo a Passo</span>
-                    </div>
-                    
-                    <div className="space-y-4">
-                      {isIOS ? (
-                        <div className="flex items-start gap-4">
-                          <div className="w-10 h-10 bg-zinc-900 rounded-xl flex items-center justify-center shrink-0 border border-zinc-800">
-                             <Share size={18} className="text-brand-accent" />
-                          </div>
-                          <div className="space-y-1">
-                            <p className="text-xs font-black text-white uppercase tracking-tight">1. Baixar Estrutura</p>
-                            <p className="text-[10px] font-medium text-zinc-500 leading-snug">Toque em Compartilhar no Safari para iniciar o download do atalho.</p>
-                          </div>
-                        </div>
-                      ) : (
-                        <div className="flex items-start gap-4">
-                          <div className="w-10 h-10 bg-zinc-900 rounded-xl flex items-center justify-center shrink-0 border border-zinc-800">
-                             <div className="flex flex-col gap-0.5">
-                               {[1,2,3].map(i => <div key={i} className="w-1 h-1 bg-brand-accent rounded-full" />)}
-                             </div>
-                          </div>
-                          <div className="space-y-1">
-                            <p className="text-xs font-black text-white uppercase tracking-tight">1. Menu de Download</p>
-                            <p className="text-[10px] font-medium text-zinc-500 leading-snug">Toque nos 3 pontos verticais do Chrome (Canto Superior).</p>
-                          </div>
-                        </div>
-                      )}
-                      
-                      <div className="flex items-start gap-4">
-                        <div className="w-10 h-10 bg-zinc-900 rounded-xl flex items-center justify-center shrink-0 border border-zinc-800">
-                           <PlusSquare size={18} className="text-brand-accent" />
-                        </div>
-                        <div className="space-y-1">
-                          <p className="text-xs font-black text-white uppercase tracking-tight">2. Criar Atalho Logo DM</p>
-                          <p className="text-[10px] font-medium text-zinc-500 leading-snug">
-                            Selecione <span className="text-white">"Adicionar à Tela de Início"</span>. O atalho aparecerá dinamicamente com o logo oficial da DM Turismo.
-                          </p>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
+              )}
 
-                  {/* Windows/Desktop Instructions if not installable */}
-                  {isDesktop && (
-                    <div className="bg-zinc-800/30 p-6 rounded-3xl border border-dashed border-zinc-700">
-                      <div className="flex items-center justify-between mb-4">
-                        <div className="flex items-center gap-2 text-zinc-500">
-                          <Monitor size={16} />
-                          <span className="text-xs font-black uppercase tracking-widest">Atalho Windows</span>
-                        </div>
-                        <span className="px-2 py-0.5 bg-zinc-800 text-[8px] font-black text-zinc-500 rounded uppercase">Alternativo</span>
-                      </div>
-                      <p className="text-zinc-500 text-[10px] font-medium leading-relaxed mb-4">
-                        Se a instalação direta não estiver disponível, baixe o atalho executável para sua área de trabalho.
-                      </p>
-                      <Button onClick={downloadShortcut} variant="secondary" className="w-full border-zinc-700 hover:border-zinc-500 py-3 rounded-2xl flex items-center justify-center gap-2">
-                        <Download size={14} />
-                        <span className="text-xs">Baixar Atalho .URL</span>
-                      </Button>
-                    </div>
-                  )}
+              {/* Desktop Shortcut */}
+              {isDesktop && (
+                <div className="bg-zinc-800/30 p-6 rounded-3xl border border-dashed border-zinc-700">
+                  <p className="text-zinc-500 text-[10px] font-medium leading-relaxed mb-4 text-center">
+                    Está no computador? Clique abaixo para criar um atalho na sua área de trabalho.
+                  </p>
+                  <Button onClick={downloadShortcut} variant="secondary" className="w-full border-zinc-700 hover:border-zinc-500 py-3 rounded-2xl flex items-center justify-center gap-2">
+                    <Download size={14} />
+                    <span className="text-xs">Baixar Atalho para o PC</span>
+                  </Button>
                 </div>
               )}
 

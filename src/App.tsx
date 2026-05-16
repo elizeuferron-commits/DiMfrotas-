@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback, lazy, Suspense } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
+import { Routes, Route, useNavigate, useLocation, Navigate } from 'react-router-dom';
 import { 
   Bus, 
   Fuel, 
@@ -24,7 +25,7 @@ import {
   CheckCircle,
   Hash,
   Clock,
-  Route,
+  Route as RouteIcon,
   FileText,
   FileSpreadsheet,
   Trash2,
@@ -32,7 +33,7 @@ import {
   Smartphone,
   X,
   Sparkles,
-  Bot,
+  Bot as BotIcon,
   Loader2,
   ShieldCheck,
   Globe,
@@ -43,7 +44,8 @@ import {
   ArrowLeft,
   Image as ImageIcon
 } from 'lucide-react';
-import { GoogleGenAI } from "@google/genai";
+import { generateAPKDigital } from './services/apkService';
+import { geminiService } from './services/geminiService';
 import { 
   GoogleAuthProvider, 
   signInWithPopup, 
@@ -108,6 +110,9 @@ declare global {
 }
 
 
+import { Login } from './components/Login';
+import { UserManagement } from './components/UserManagement';
+
 // Componentes Modulares
 import { Sidebar } from './components/Sidebar';
 import { Card, StatCard } from './components/Cards';
@@ -133,6 +138,7 @@ import { ReportsView } from './components/ReportsView';
 import { JourneyControl } from './components/JourneyControl';
 import { CharteredRoutes } from './components/CharteredRoutes';
 import { AIConsultant } from './components/AIConsultant';
+import { hasPermission } from './lib/permissions';
 
 
 // Role permissions mapping
@@ -144,6 +150,7 @@ const ROLE_PERMISSIONS: Record<string, { label: string, icon: string }[]> = {
     { label: 'Equipe', icon: 'Users' },
     { label: 'Almoxarifado', icon: 'Package' },
     { label: 'Financeiro', icon: 'DollarSign' },
+    { label: 'Usuários', icon: 'Users' },
     { label: 'Criação', icon: 'PlusCircle' },
   ],
   'Gestor de Frotas': [
@@ -178,55 +185,65 @@ const ROLE_PERMISSIONS: Record<string, { label: string, icon: string }[]> = {
 };
 
 export default function App() {
-  const [user, setUser] = React.useState<FirebaseUser | null>(null);
-  const [profile, setProfile] = React.useState<UserProfile | null>(null);
-  const [loading, setLoading] = React.useState(true);
-  const [activeSection, setActiveSection] = React.useState('dashboard');
+  const navigate = useNavigate();
+  const location = useLocation();
+
+  const [user, setUser] = useState<FirebaseUser | null>(null);
+  const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [loading, setLoading] = useState(true);
+  
+  // Sync activeSection with URL path
+  const activeSection = useMemo(() => {
+    const path = location.pathname.split('/')[1] || 'dashboard';
+    return path;
+  }, [location.pathname]);
+
   const [showHistory, setShowHistory] = useState(false);
-  const [navStack, setNavStack] = React.useState<string[]>(['dashboard']);
+  const [navStack, setNavStack] = useState<string[]>(['dashboard']);
 
   const handleNavigate = useCallback((sectionId: string) => {
-    setActiveSection(prev => {
-      if (prev === sectionId) return prev;
-      setNavStack(stack => {
-        // Limit stack size to 10
-        const newStack = [...stack, sectionId].slice(-10);
-        return newStack;
-      });
-      return sectionId;
+    navigate(`/${sectionId}`);
+    setNavStack(stack => {
+      if (stack[stack.length - 1] === sectionId) return stack;
+      return [...stack, sectionId].slice(-10);
     });
-  }, []);
+  }, [navigate]);
 
   const handleBack = useCallback(() => {
-    setNavStack(stack => {
-      if (stack.length <= 1) return stack;
-      const newStack = [...stack];
-      newStack.pop();
-      const previous = newStack[newStack.length - 1];
-      setActiveSection(previous);
-      return newStack;
-    });
-  }, []);
-  const [sidebarOpen, setSidebarOpen] = React.useState(false);
+    if (navStack.length > 1) {
+      navigate(-1);
+      setNavStack(stack => {
+        const newStack = [...stack];
+        newStack.pop();
+        return newStack;
+      });
+    }
+  }, [navigate, navStack.length]);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   
   // Section labels updated
-  const sections = [
-    { id: 'dashboard', label: 'Início', icon: LayoutDashboard },
-    { id: 'journey', label: 'Jornada', icon: Clock },
-    { id: 'fretamento', label: 'Fretamento', icon: Route },
-    { id: 'fleet', label: 'Frota', icon: Bus },
-    { id: 'vencimentos', label: 'Vencimentos', icon: Calendar },
-    { id: 'finance', label: 'Financeiro', icon: DollarSign },
-    { id: 'fuel', label: 'Combustível', icon: Fuel },
-    { id: 'maintenance', label: 'Manutenções', icon: Wrench },
-    { id: 'staff', label: 'Equipe', icon: Users },
-    { id: 'trips', label: 'Viagens', icon: TrendingUp },
-    { id: 'os', label: 'OS de Viagem', icon: FileText },
-    { id: 'inventory', label: 'Almoxarifado', icon: Package },
-    { id: 'reports', label: 'Relatórios', icon: Bell },
-    { id: 'ai-consultant', label: 'Consultor IA', icon: Bot },
-    ...(profile?.email === 'elizeuferron@gmail.com' ? [{ id: 'creacao', label: 'Criação', icon: Sparkles }] : []),
-  ];
+  const sections = useMemo(() => {
+    const base = [
+      { id: 'dashboard', label: 'Início', icon: LayoutDashboard },
+      { id: 'journey', label: 'Jornada', icon: Clock },
+      { id: 'fretamento', label: 'Fretamento', icon: RouteIcon },
+      { id: 'fleet', label: 'Frota', icon: Bus },
+      { id: 'vencimentos', label: 'Vencimentos', icon: Calendar },
+      { id: 'finance', label: 'Financeiro', icon: DollarSign },
+      { id: 'fuel', label: 'Combustível', icon: Fuel },
+      { id: 'maintenance', label: 'Manutenções', icon: Wrench },
+      { id: 'staff', label: 'Equipe', icon: Users },
+      { id: 'trips', label: 'Viagens', icon: TrendingUp },
+      { id: 'os', label: 'OS de Viagem', icon: FileText },
+      { id: 'users', label: 'Usuários', icon: Users },
+      { id: 'inventory', label: 'Almoxarifado', icon: Package },
+      { id: 'reports', label: 'Relatórios', icon: Bell },
+      { id: 'ai-consultant', label: 'Consultor IA', icon: BotIcon },
+      { id: 'creacao', label: 'Criação', icon: Sparkles },
+    ];
+
+    return base.filter(s => hasPermission(profile?.role, s.id, profile?.email, profile?.permissions));
+  }, [profile]);
   
   // Modais
   const [isVehicleModalOpen, setIsVehicleModalOpen] = useState(false);
@@ -289,6 +306,14 @@ export default function App() {
 
     checkStandalone();
     
+    // Auto-prompt to install on mobile after login if not already standalone
+    const timer = setTimeout(() => {
+      const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+      if (isMobile && !window.matchMedia('(display-mode: standalone)').matches) {
+        setShowInstallModal(true);
+      }
+    }, 5000);
+
     const handler = (e: any) => {
       e.preventDefault();
       setDeferredPrompt(e);
@@ -334,7 +359,7 @@ export default function App() {
   const handleShareStaffAccess = (employee: Employee) => {
     const appUrl = window.location.origin;
     const shareUrl = `${appUrl}/?emp=${employee.id}`;
-    const message = `🚀 *DM TURISMO PRO - INSTALADOR APK*%0A%0AOlá ${employee.name}! 👋%0A%0AO seu Portal do Colaborador está pronto para uso offline.%0A%0A📲 *BAIXAR APLICATIVO (APK):* ${shareUrl}%0A%0A*PASSO A PASSO PARA ANDROID:*%0A1. Clique no link acima.%0A2. No Chrome, toque nos *3 PONTINHOS* (Canto superior).%0A3. Escolha *INSTALAR APLICATIVO* ou *ADICIONAR À TELA DE INÍCIO*.%0A4. O ícone aparecerá no seu celular como um APK nativo.%0A%0A_DM Turismo - Desempenho e Tecnologia._`;
+    const message = `🚀 *DM PRO - SEU APLICATIVO ESTÁ PRONTO* 🚀%0A%0AOlá *${employee.name.toUpperCase()}*! 👋%0A%0ASeu terminal de logística e viagens foi liberado. Instale agora no seu celular para facilitar o acesso:%0A%0A🔗 *CLIQUE PARA INSTALAR:*%0A${shareUrl}%0A%0A📲 *COMO COLOCAR NA TELA DO CELULAR (ANDRÓID OU IPHONE):*%0A1. Clique no link acima.%0A2. Toque nos *3 PONTINHOS* no Android ou no ícone de *COMPARTILHAR* no iPhone.%0A3. Escolha *"Instalar Aplicativo"* ou *"Adicionar à Tela de Início"*.%0A%0A_DM TURISMO - Tecnologia e Logística Avançada._`;
     const cleanPhone = (employee.phone || '').replace(/\D/g, '');
     const formattedPhone = cleanPhone.startsWith('55') ? cleanPhone : '55' + cleanPhone;
     window.open(`https://wa.me/${formattedPhone}?text=${message}`, '_blank');
@@ -403,146 +428,7 @@ export default function App() {
   };
 
   const handleExportAPKDigital = () => {
-    try {
-      const appUrl = window.location.origin;
-      const htmlContent = `
-<!DOCTYPE html>
-<html lang="pt-br">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>DM TURISMO - APK DIGITAL</title>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;900&display=swap" rel="stylesheet">
-    <style>
-        body { 
-          background: #09090b; 
-          color: white; 
-          font-family: 'Inter', sans-serif; 
-          display: flex; 
-          flex-direction: column; 
-          align-items: center; 
-          justify-content: center; 
-          height: 100vh; 
-          margin: 0; 
-          text-align: center;
-          background-image: radial-gradient(circle at top right, #ff6b001a, transparent), radial-gradient(circle at bottom left, #00d2ff1a, transparent);
-        }
-        .card { 
-          background: #18181b; 
-          padding: 3rem; 
-          border-radius: 2.5rem; 
-          border: 1px solid rgba(255,255,255,0.05); 
-          box-shadow: 0 40px 100px -20px rgba(0,0,0,0.8); 
-          max-width: 380px;
-          backdrop-filter: blur(20px);
-          position: relative;
-          overflow: hidden;
-        }
-        .glow {
-          position: absolute;
-          top: -50%;
-          left: -50%;
-          width: 200%;
-          height: 200%;
-          background: conic-gradient(from 0deg, transparent, #ff6b00, transparent, #00d2ff, transparent);
-          animation: rotate 10s linear infinite;
-          opacity: 0.1;
-          pointer-events: none;
-        }
-        @keyframes rotate { 100% { transform: rotate(360deg); } }
-        .logo-container {
-          width: 100px;
-          height: 100px;
-          background: #ff6b00;
-          border-radius: 2rem;
-          margin: 0 auto 2rem;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          font-weight: 900;
-          font-size: 2.5rem;
-          color: #0c0c0e;
-          transform: rotate(-3deg);
-          box-shadow: 0 20px 40px -10px rgba(255,107,0,0.4);
-        }
-        h1 { margin: 0; font-size: 1.75rem; font-weight: 900; letter-spacing: -0.05em; text-transform: uppercase; }
-        .badge {
-          display: inline-block;
-          padding: 0.25rem 0.75rem;
-          background: rgba(255,107,0,0.1);
-          border: 1px solid rgba(255,107,0,0.2);
-          border-radius: 100px;
-          color: #ff6b00;
-          font-size: 0.65rem;
-          font-weight: 900;
-          text-transform: uppercase;
-          letter-spacing: 0.1rem;
-          margin-bottom: 1rem;
-        }
-        p { color: #888; font-size: 0.9rem; margin-top: 1rem; margin-bottom: 2.5rem; line-height: 1.6; font-weight: 500; }
-        .btn { 
-          background: #ff6b00; 
-          color: #000; 
-          text-decoration: none; 
-          padding: 1.25rem 2.5rem; 
-          border-radius: 1.25rem; 
-          font-weight: 900; 
-          text-transform: uppercase; 
-          letter-spacing: 0.05em; 
-          display: block; 
-          transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-          box-shadow: 0 15px 30px -10px rgba(255,107,0,0.3);
-          font-size: 0.9rem;
-        }
-        .btn:hover { 
-          transform: translateY(-4px) scale(1.02); 
-          background: #fff;
-          box-shadow: 0 20px 40px -10px rgba(255,255,255,0.2);
-        }
-        .footer {
-          margin-top: 3rem;
-          font-size: 0.7rem;
-          color: #444;
-          text-transform: uppercase;
-          font-weight: 900;
-          letter-spacing: 0.3em;
-        }
-    </style>
-</head>
-<body>
-    <div class="card">
-        <div class="glow"></div>
-        <div class="badge">Terminal Corporativo</div>
-        <div class="logo-container">DM</div>
-        <h1>DM Turismo Pro</h1>
-        <p>Iniciando o terminal de logística e viagens em seu dispositivo móvel...</p>
-        <a href="${appUrl}" class="btn">Conectar Agora</a>
-    </div>
-    <div class="footer">DM Turismo • Digital Ecosystem © 2026</div>
-    <script>
-        setTimeout(() => { window.location.href = "${appUrl}"; }, 4000);
-    </script>
-</body>
-</html>`;
-
-      const blob = new Blob([htmlContent], { type: 'text/html' });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = `DM_TURISMO_PRO_APK.html`;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(url);
-
-      toast.success("APK Digital gerado com sucesso!", {
-        description: "Envie este arquivo para o Google Drive e compartilhe o link do Drive com sua equipe.",
-        duration: 6000,
-      });
-    } catch (error) {
-      console.error("Erro ao gerar APK:", error);
-      toast.error("Erro ao processar o terminal digital.");
-    }
+    generateAPKDigital();
   };
 
   useEffect(() => {
@@ -1180,36 +1066,10 @@ export default function App() {
 
     setIsProcessingModalAttachment(attachment.name);
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-
       const [header, base64Data] = attachment.url.split(',');
       const mimeType = header.match(/:(.*?);/)?.[1] || 'image/jpeg';
 
-      const prompt = "Extraia a lista de passageiros deste documento. Retorne um JSON com um array de objetos contendo 'name' (NOME COMPLETO EM MAIÚSCULAS) e 'document' (CPF ou RG). Se não houver documento, use 'S/D'.";
-
-      const result = await (ai as any).models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: [
-          {
-            role: "user",
-            parts: [
-              { text: prompt },
-              {
-                inlineData: {
-                  data: base64Data,
-                  mimeType
-                }
-              }
-            ]
-          }
-        ],
-        config: {
-          responseMimeType: "application/json"
-        }
-      });
-
-      const responseText = result.text();
-      const extractedData = JSON.parse(responseText);
+      const extractedData = await geminiService.extractPassengers(base64Data, mimeType);
 
       if (extractedData && Array.isArray(extractedData)) {
         const newPassengers = extractedData.map((p: any) => ({
@@ -1438,35 +1298,7 @@ export default function App() {
   if (loading) return <SplashScreen />;
 
   if (!user) {
-    return (
-      <div className="min-h-screen travel-gradient flex items-center justify-center p-6 font-sans relative overflow-hidden">
-        <div className="absolute inset-0 map-pattern opacity-10" />
-        <div className="w-full max-w-md space-y-12 text-center animate-in fade-in zoom-in duration-1000 relative z-10">
-          <div className="w-32 h-32 bg-brand-accent rounded-[2.5rem] mx-auto flex items-center justify-center transform rotate-12 shadow-2xl shadow-brand-accent/30 glow-brand">
-            <Bus className="w-16 h-16 text-asphalt-950 transform -rotate-12" />
-          </div>
-          <div className="space-y-6">
-            <h1 className="text-6xl font-black text-white tracking-tighter leading-none uppercase font-display">DM Turismo</h1>
-            <p className="text-sky-blue font-black tracking-tight px-10 leading-relaxed opacity-80 uppercase text-[10px] tracking-[0.4em]">Logística & Aventuras Premium</p>
-          </div>
-          <button 
-            onClick={login} 
-            className="w-full py-6 bg-white hover:bg-zinc-100 text-zinc-950 rounded-[2.5rem] font-black transition-all flex items-center justify-center gap-4 shadow-2xl active:scale-95 group relative overflow-hidden travel-button"
-          >
-             <div className="w-8 h-8 bg-zinc-950/10 rounded-xl flex items-center justify-center text-xs font-black group-hover:bg-zinc-950/20 transition-colors">G</div>
-             Entrar na Conta Corporativa
-          </button>
-          <div className="pt-8 space-y-6">
-            <div className="pt-4 border-t border-white/5 flex items-center justify-center gap-6">
-              <a href="#" className="text-[9px] font-bold text-zinc-500 hover:text-sky-blue uppercase tracking-widest transition-colors">Privacidade</a>
-              <a href="#" className="text-[9px] font-bold text-zinc-500 hover:text-sky-blue uppercase tracking-widest transition-colors">Turismo & Rodoviário</a>
-            </div>
-
-            <p className="text-[10px] text-zinc-600 font-black uppercase tracking-[0.5em] pt-4">DM Turismo • App Oficial © 2026</p>
-          </div>
-        </div>
-      </div>
-    );
+    return <Login onSuccess={() => navigate('/dashboard')} />;
   }
 
   return (
@@ -1482,7 +1314,7 @@ export default function App() {
         setActiveSection={handleNavigate}
         profile={profile}
         logout={logout}
-        isInstallable={!isStandalone}
+        isInstallable={isInstallable}
         onInstall={handleInstallApp}
       />
 
@@ -1600,62 +1432,60 @@ export default function App() {
               <Loader2 className="animate-spin text-brand-accent" size={32} />
             </div>
           }>
-            {activeSection === 'dashboard' && (
-              <Dashboard 
-                vehicles={vehicles}
-                employees={employees}
-                fuelLogs={recentFuelLogs}
-                maintenance={maintenance}
-                trips={trips}
-                user={profile}
-                setActiveSection={setActiveSection}
-                onViewTrip={(trip) => {
-                  setSelectedTrip(trip);
-                  setIsOSModalOpen(true);
-                }}
-                onUpdateEmployeePhoto={async (employeeId, photoUrl) => {
-                  try {
-                    await setDoc(doc(db, 'employees', employeeId), { photoUrl }, { merge: true });
-                    toast.success('Foto atualizada com sucesso!');
-                  } catch (error) {
-                    handleFirestoreError(error, OperationType.WRITE, 'employees');
-                  }
-                }}
-              />
-            )}
+            <Routes>
+              <Route path="/dashboard" element={
+                <Dashboard 
+                  vehicles={vehicles}
+                  employees={employees}
+                  fuelLogs={recentFuelLogs}
+                  maintenance={maintenance}
+                  trips={trips}
+                  user={profile}
+                  setActiveSection={handleNavigate}
+                  onViewTrip={(trip) => {
+                    setSelectedTrip(trip);
+                    setIsOSModalOpen(true);
+                  }}
+                  onShowInstall={() => setShowInstallModal(true)}
+                  onUpdateEmployeePhoto={async (employeeId, photoUrl) => {
+                    try {
+                      await setDoc(doc(db, 'employees', employeeId), { photoUrl }, { merge: true });
+                      toast.success('Foto atualizada com sucesso!');
+                    } catch (error) {
+                      handleFirestoreError(error, OperationType.WRITE, 'employees');
+                    }
+                  }}
+                />
+              } />
 
-            {activeSection === 'journey' && profile && (
-              <JourneyControl employee={profile} journeys={journeys} />
-            )}
+              <Route path="/journey" element={profile ? <JourneyControl employee={profile} journeys={journeys} /> : <Navigate to="/dashboard" replace />} />
 
-            {activeSection === 'fretamento' && (
-              <CharteredRoutes vehicles={vehicles} employees={employees} routes={charteredRoutes} />
-            )}
+              <Route path="/fretamento" element={<CharteredRoutes vehicles={vehicles} employees={employees} routes={charteredRoutes} />} />
 
-            {activeSection === 'fleet' && (
-              <FleetList 
-                vehicles={vehicles}
-                onAddVehicle={handleOpenAddVehicle}
-                onVehicleClick={handleVehicleClick}
-              />
-            )}
+              <Route path="/fleet" element={
+                <FleetList 
+                  vehicles={vehicles}
+                  onAddVehicle={handleOpenAddVehicle}
+                  onVehicleClick={handleVehicleClick}
+                />
+              } />
 
-            {activeSection === 'vencimentos' && (
-              <Vencimentos 
-                vehicleVencimentos={vehicleVencimentos}
-                driverVencimentos={driverVencimentos}
-              />
-            )}
-            
-            {activeSection === 'finance' && (
-              <Finance 
-                transactions={transactions}
-                onAddTransaction={openFinancialModal}
-                onUpdateStatus={handleUpdateFinanceStatus}
-              />
-            )}
+              <Route path="/vencimentos" element={
+                <Vencimentos 
+                  vehicleVencimentos={vehicleVencimentos}
+                  driverVencimentos={driverVencimentos}
+                />
+              } />
+              
+              <Route path="/finance" element={
+                <Finance 
+                  transactions={transactions}
+                  onAddTransaction={openFinancialModal}
+                  onUpdateStatus={handleUpdateFinanceStatus}
+                />
+              } />
 
-            {activeSection === 'trips' && (
+              <Route path="/trips" element={
             <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
               <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
                 <div>
@@ -1905,29 +1735,27 @@ export default function App() {
                 </div>
               )}
             </div>
-          )}
+          } />
 
-            {activeSection === 'reports' && (
-              <ReportsView 
-                vehicles={vehicles}
-                employees={employees}
-                fuelLogs={recentFuelLogs}
-                maintenance={maintenance}
-                trips={trips}
-                finance={transactions}
-                onShare={handleShareReport}
-              />
-            )}
+              <Route path="/reports" element={
+                <ReportsView 
+                  vehicles={vehicles}
+                  employees={employees}
+                  fuelLogs={recentFuelLogs}
+                  maintenance={maintenance}
+                  trips={trips}
+                  finance={transactions}
+                  onShare={handleShareReport}
+                />
+              } />
 
-            {activeSection === 'ai-consultant' && (
-              <AIConsultant />
-            )}
+              <Route path="/ai-consultant" element={<AIConsultant />} />
 
-            {activeSection === 'creacao' && profile?.email === 'elizeuferron@gmail.com' && (
-              <CreationTool />
-            )}
+              <Route path="/creacao" element={hasPermission(profile?.role, 'creacao', profile?.email, profile?.permissions) ? <CreationTool /> : <Navigate to="/dashboard" replace />} />
 
-          {activeSection === 'os' && (
+              <Route path="/users" element={hasPermission(profile?.role, 'users', profile?.email, profile?.permissions) ? <UserManagement /> : <Navigate to="/dashboard" replace />} />
+
+              <Route path="/os" element={
             <div className="space-y-12 animate-in fade-in slide-in-from-bottom-4 duration-700">
               <div className="flex flex-col md:flex-row md:items-end justify-between gap-6">
                 <div className="flex flex-col gap-3">
@@ -1977,9 +1805,9 @@ export default function App() {
                 </div>
               )}
             </div>
-          )}
+          } />
 
-          {activeSection === 'fuel' && (
+              <Route path="/fuel" element={
             <div className="space-y-12 animate-in fade-in slide-in-from-bottom-4 duration-500">
               <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
                 <div>
@@ -2156,13 +1984,13 @@ export default function App() {
                         </div>
                       </div>
 
-                      {isLow && (
-                        <div className="mt-6 p-4 bg-rose-500/10 border border-rose-500/20 rounded-2xl flex items-center gap-4 animate-pulse">
-                          <AlertTriangle size={20} className="text-rose-500" />
-                          <span className="text-[10px] font-black text-rose-500 uppercase tracking-widest">Atenção: Nível de Reserva Ativado</span>
-                        </div>
-                      )}
-                    </Card>
+                        {isLow && (
+                          <div className="mt-6 p-4 bg-rose-500/10 border border-rose-500/20 rounded-2xl flex items-center gap-4 animate-pulse">
+                            <AlertTriangle size={20} className="text-rose-500" />
+                            <span className="text-[10px] font-black text-rose-500 uppercase tracking-widest">Atenção: Nível de Reserva Ativado</span>
+                          </div>
+                        )}
+                      </Card>
                   );
                 })}
                 
@@ -2260,9 +2088,9 @@ export default function App() {
                 </div>
               </div>
             </div>
-          )}
+          } />
 
-          {activeSection === 'maintenance' && (
+              <Route path="/maintenance" element={
             <div className="space-y-12">
               <div className="flex flex-col gap-8 border-b border-zinc-800 pb-8">
                 <div className="flex flex-col gap-2">
@@ -2537,9 +2365,9 @@ export default function App() {
                 </div>
               </div>
             </div>
-          )}
+          } />
 
-          {activeSection === 'staff' && (
+              <Route path="/staff" element={
             <div className="space-y-12 animate-in fade-in slide-in-from-bottom-4 duration-700">
               <div className="flex items-center justify-between border-b border-white/5 pb-8">
                 <div className="flex flex-col gap-2">
@@ -2550,36 +2378,12 @@ export default function App() {
                       {employees.length} Colaboradores Registrados
                     </p>
                     <button 
-                      onClick={handleShareAppLink}
-                      className="flex items-center gap-2 px-3 py-1.5 bg-emerald-500/10 text-emerald-500 rounded-lg text-[8px] font-black uppercase tracking-widest hover:bg-emerald-500 hover:text-white transition-all shadow-lg active:scale-95"
-                    >
-                      <Share2 size={12} />
-                      Compartilhar Link
-                    </button>
-                    <button 
                       onClick={handleExportStaffToExcel}
                       className="flex items-center gap-2 px-3 py-1.5 bg-asphalt-900 text-zinc-400 rounded-lg text-[8px] font-black uppercase tracking-widest hover:bg-asphalt-800 hover:text-white transition-all shadow-lg active:scale-95 border border-white/5"
                     >
                       <FileSpreadsheet size={12} />
                       Excel
                     </button>
-                    <div className="flex items-center gap-2">
-                      <button 
-                        onClick={handleExportAPKDigital}
-                        className="flex items-center gap-3 px-4 py-2 bg-brand-accent text-zinc-950 rounded-xl text-[10px] font-black uppercase tracking-widest hover:scale-105 transition-all shadow-xl shadow-brand-accent/20 active:scale-95 travel-button"
-                      >
-                        <Smartphone size={14} />
-                        Gerar APK para Drive
-                      </button>
-                      <div className="hidden group xl:block relative">
-                        <div className="p-2 bg-asphalt-900 rounded-full text-zinc-600 border border-white/5 hover:text-white cursor-help">
-                          <Bell size={12} />
-                        </div>
-                        <div className="absolute left-full ml-3 top-1/2 -translate-y-1/2 w-48 p-3 bg-asphalt-900 border border-white/5 rounded-xl shadow-2xl text-[8px] font-black uppercase tracking-[0.2em] text-zinc-400 invisible group-hover:visible z-50">
-                          Instrução: Baixe o arquivo HTML gerado, faça o upload para o Google Drive e compartilhe o link com os funcionários para instalação direta.
-                        </div>
-                      </div>
-                    </div>
                   </div>
                 </div>
                 <div className="text-right">
@@ -2687,7 +2491,24 @@ export default function App() {
                             )}
                           </div>
                           <div>
-                            <h4 className="font-black text-white uppercase text-sm tracking-tight leading-none mb-1.5">{e.name}</h4>
+                            <h4 className="font-black text-white uppercase text-sm tracking-tight leading-none mb-1.5 flex items-center gap-2">
+                              {e.name}
+                              <button 
+                                onClick={(evt) => {
+                                  evt.stopPropagation();
+                                  const appUrl = window.location.origin;
+                                  const shareUrl = `${appUrl}/?emp=${e.id}`;
+                                  navigator.clipboard.writeText(shareUrl);
+                                  toast.success("Link de acesso copiado!", {
+                                    description: `O link de acesso para ${e.name} foi copiado para sua área de transferência.`
+                                  });
+                                }}
+                                className="p-1 text-zinc-500 hover:text-brand-accent transition-colors active:scale-90"
+                                title="Copiar Link de Acesso"
+                              >
+                                <Share2 size={12} />
+                              </button>
+                            </h4>
                             <div className="flex items-center gap-2">
                               <span className="text-[8px] font-black px-1.5 py-0.5 bg-zinc-800 text-zinc-400 rounded uppercase tracking-widest">{e.role}</span>
                               {e.permissions && e.permissions.length > 0 && (
@@ -2732,7 +2553,7 @@ export default function App() {
                                 {p.icon === 'Bell' && <Bell size={10} />}
                                 {p.icon === 'Sparkles' && <Sparkles size={10} />}
                                 {p.icon === 'Clock' && <Clock size={10} />}
-                                {p.icon === 'Route' && <Route size={10} />}
+                                {p.icon === 'Route' && <RouteIcon size={10} />}
                               </div>
                               <span className="text-[7px] font-black text-zinc-500 uppercase tracking-tighter">{p.label}</span>
                             </div>
@@ -2778,17 +2599,32 @@ export default function App() {
                                 {e.phone || 'N/A'}
                              </div>
                              {e.phone && (
-                               <>
+                               <div className="flex flex-wrap gap-2">
                                  <button 
                                    onClick={(evt) => {
                                      evt.stopPropagation();
                                      handleShareStaffAccess(e);
                                    }}
                                    className="p-2 bg-emerald-500 text-zinc-950 hover:bg-white rounded-lg transition-all shadow-lg active:scale-90 flex items-center gap-2 group"
-                                   title="Compartilhar Instalador APK via WhatsApp"
+                                   title="Enviar Link de Instalação via WhatsApp"
+                                 >
+                                   <div className="flex items-center gap-1.5">
+                                      <img src="https://upload.wikimedia.org/wikipedia/commons/6/6b/WhatsApp.svg" className="w-3.5 h-3.5" alt="WA" />
+                                      <span className="text-[9px] font-black uppercase tracking-widest">Enviar Link APK</span>
+                                   </div>
+                                 </button>
+
+                                 <button 
+                                   onClick={(evt) => {
+                                     evt.stopPropagation();
+                                     const personalizedUrl = `${window.location.origin}/?emp=${e.id}`;
+                                     generateAPKDigital(personalizedUrl, e.name);
+                                   }}
+                                   className="p-2 bg-brand-accent text-zinc-950 hover:bg-white rounded-lg transition-all shadow-lg active:scale-90 flex items-center gap-2 group"
+                                   title="Baixar Arquivo APK Digital Personalizado"
                                  >
                                    <Smartphone size={14} />
-                                     <span className="text-[9px] font-black uppercase tracking-widest">Enviar APK</span>
+                                   <span className="text-[9px] font-black uppercase tracking-widest">Baixar APK</span>
                                  </button>
 
                                  <button 
@@ -2800,20 +2636,35 @@ export default function App() {
                                    title="Exportar Ficha Excel"
                                  >
                                    <FileSpreadsheet size={14} />
-                                     <span className="text-[9px] font-black uppercase tracking-widest text-zinc-500 group-hover:text-white">Excel</span>
+                                   <span className="text-[9px] font-black uppercase tracking-widest">Ficha</span>
                                  </button>
-                               </>
+                               </div>
                              )}
                           </div>
                         </div>
                       </div>
+                      
+                      {/* Folder Footer - APK Link */}
+                      <div className="p-4 bg-zinc-950/50 flex items-center justify-center border-t border-zinc-800/20">
+                         <button 
+                           onClick={(evt) => {
+                             evt.stopPropagation();
+                             generateAPKDigital(`${window.location.origin}/?emp=${e.id}`, e.name);
+                           }}
+                           className="w-full py-2.5 bg-brand-accent/10 hover:bg-brand-accent hover:text-zinc-950 text-brand-accent rounded-xl text-[8px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-2 border border-brand-accent/20 shadow-lg group-hover:shadow-brand-accent/10"
+                         >
+                            <Smartphone size={12} />
+                            Gerar Instalador Digital (APK)
+                         </button>
+                      </div>
                      </Card>
                     );
                   })}
-               </div>
+                </div>
             </div>
-          )}
-          {activeSection === 'inventory' && (
+          } />
+
+              <Route path="/inventory" element={
             <div className="space-y-12">
               <div className="flex flex-col gap-3">
                 <h1 className="text-4xl font-black text-white uppercase tracking-tighter">Almoxarifado DM</h1>
@@ -2881,7 +2732,11 @@ export default function App() {
                 )}
               </div>
             </div>
-          )}
+          } />
+
+              <Route path="/" element={<Navigate to="/dashboard" replace />} />
+              <Route path="*" element={<Navigate to="/dashboard" replace />} />
+            </Routes>
 
           {/* Bottom padding for mobile fab or spacing */}
           <div className="h-32" />

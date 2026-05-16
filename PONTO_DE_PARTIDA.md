@@ -57,5 +57,12 @@ O sistema opera como um ecossistema de instalação única, preparado para todas
 - **Alertas de KM**: Monitoramento preditivo de troca de óleo e revisões.
 
 ---
-**Data de Atualização:** 15/05/2026
+**Data de Atualização:** 16/05/2026
 **Responsável:** DM Pro Dev Team
+
+## 🌑 Atualizações Recentes (16/05/2026)
+- **Preparação Nativa Android**: Plataforma Android inicializada com Capacitor 8.3, SDK 36 (Android 15) configurado e sincronizado.
+- **Refatoração HashRouter**: Sistema de roteamento robusto para suporte a navegação por histórico e botão voltar em apps nativos.
+- **Instalador APK Corporativo v2**: Versão aprimorada do instalador portátil (.html) com guia visual passo-a-passo para instalação como App nativo em Android e iOS.
+- **Gestão Financeira de Oficina**: Inclusão de custos reais e datas de conclusão no histórico de manutenção de veículos para análise de ROI.
+- **Ecossistema de Compartilhamento**: Módulo de compartilhamento universal para colaboradores via WhatsApp, simplificando a distribuição do ecossistema DM.

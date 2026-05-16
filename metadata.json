@@ -1,5 +1,6 @@
 {
   "name": "DM Turismo",
   "description": "Sistema profissional de gestão de turismo com controle de frotas, viagens, financeiro e equipe.",
-  "requestFramePermissions": ["camera", "microphone"]
+  "requestFramePermissions": ["camera", "microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

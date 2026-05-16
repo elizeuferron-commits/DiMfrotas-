@@ -4,7 +4,7 @@ export const ROLE_PERMISSIONS: Record<string, string[]> = {
   'Dono / Proprietário': [
     'fleet', 'dashboard', 'finance', 'vencimentos', 'fuel', 
     'maintenance', 'staff', 'trips', 'os', 'inventory', 'reports',
-    'journey', 'fretamento', 'ai-consultant'
+    'journey', 'fretamento', 'ai-consultant', 'users', 'creacao'
   ],
   'Motorista': ['fuel', 'maintenance', 'os', 'dashboard', 'journey', 'ai-consultant'],
   'Limpeza / Conservação': ['inventory', 'fuel', 'os', 'dashboard', 'ai-consultant'],

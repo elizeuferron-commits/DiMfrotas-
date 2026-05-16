@@ -21,7 +21,7 @@ import {
   ExternalLink,
   MessageSquare,
   Send,
-  Bot,
+  Bot as BotIcon,
   Sparkles,
   Mic,
   MicOff,
@@ -119,8 +119,8 @@ export const CreationTool: React.FC = () => {
     setIsTyping(true);
 
     try {
-      // System instructions to guide the AI to act as the DM Pro Assistant
-      const systemInstruction = `Você é o "DM Pro Assistente", um agente de IA especializado em auxiliar Elizeu Ferron na gestão técnica da DM Turismo.
+      // System instructions to guide the AI to act as the DM Pro Consultant
+      const systemInstruction = `Você é o "Consultor DM Pro", um agente de IA especializado em auxiliar Elizeu Ferron na gestão técnica da DM Turismo.
       Sua personalidade é técnica, proativa e focada em engenharia de software e logística.
       Sempre que Elizeu pedir para "otimizar", "melhorar", "atualizar" ou mencionar novas tecnologias, analise e sugira uma "Proposta de Atualização Automática".
       FORMATO DE RESPOSTA PARA PROPOSTAS:
@@ -375,7 +375,7 @@ export const CreationTool: React.FC = () => {
         {/* Chat IA Elizeu */}
         <Card className="bg-zinc-950/50 border-zinc-800 p-8 flex flex-col h-[600px] gap-6 relative group overflow-hidden">
           <div className="absolute top-0 right-0 p-8 pointer-events-none opacity-5">
-             <Bot size={120} />
+             <BotIcon size={120} />
           </div>
           
           <div className="flex items-center justify-between relative z-10">
@@ -384,7 +384,7 @@ export const CreationTool: React.FC = () => {
                 <MessageSquare size={18} className="text-brand-accent" />
               </div>
               <div>
-                <h3 className="text-sm font-black text-white uppercase tracking-wider">DM Pro Assistente</h3>
+                <h3 className="text-sm font-black text-white uppercase tracking-wider">Consultor DM Pro</h3>
                 <p className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest mt-0.5">Canal Direto com Elizeu Ferron</p>
               </div>
             </div>
@@ -469,7 +469,7 @@ export const CreationTool: React.FC = () => {
                   "w-8 h-8 rounded-lg flex items-center justify-center shrink-0",
                   item.role === 'ai' ? "bg-brand-accent/20 text-brand-accent" : "bg-zinc-800 text-zinc-100"
                 )}>
-                  {item.role === 'ai' ? <Bot size={16} /> : <User size={16} />}
+                  {item.role === 'ai' ? <BotIcon size={16} /> : <User size={16} />}
                 </div>
                 <div className={cn(
                   "p-4 rounded-2xl text-[11px] font-medium leading-relaxed shadow-lg",
@@ -484,7 +484,7 @@ export const CreationTool: React.FC = () => {
             {isTyping && (
               <div className="flex gap-4">
                 <div className="w-8 h-8 rounded-lg bg-brand-accent/20 text-brand-accent flex items-center justify-center">
-                  <Bot size={16} />
+                  <BotIcon size={16} />
                 </div>
                 <div className="bg-zinc-900 border border-zinc-800 p-4 rounded-2xl rounded-tl-none flex gap-1">
                    <div className="w-1 h-1 bg-brand-accent rounded-full animate-bounce" />
@@ -567,7 +567,7 @@ export const CreationTool: React.FC = () => {
                   </div>
 
                   <div className="flex items-center justify-center gap-2">
-                     <span className="text-[8px] font-black text-zinc-600 uppercase tracking-widest">IA Agent Mode Ativo</span>
+                     <span className="text-[8px] font-black text-zinc-600 uppercase tracking-widest">Modo Consultor Pro Ativo</span>
                      <div className="w-1 h-1 bg-brand-accent rounded-full animate-pulse" />
                   </div>
                 </motion.div>

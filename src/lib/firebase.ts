@@ -5,34 +5,43 @@ import firebaseConfig from '../../firebase-applet-config.json';
 
 const app = initializeApp(firebaseConfig);
 
-// Otimização para ambiente de rede restrito/proxy
+// Optimized Firestore initialization with detailed logging
+console.log("Initializing Firestore with Database ID:", firebaseConfig.firestoreDatabaseId);
+
 export const db = initializeFirestore(app, {
   experimentalForceLongPolling: true,
+  cacheSizeBytes: -1, 
 }, firebaseConfig.firestoreDatabaseId);
 
-// Enable persistence
-enableMultiTabIndexedDbPersistence(db).catch((err) => {
-  if (err.code == 'failed-precondition') {
-    // Multiple tabs open, persistence can only be enabled
-    // in one tab at a time.
-    console.warn('Firestore persistence failed: multiple tabs open');
-  } else if (err.code == 'unimplemented') {
-    // The current browser does not support all of the
-    // features required to enable persistence
-    console.warn('Firestore persistence failed: browser not supported');
+// Persistence check
+const enablePersistence = async () => {
+  try {
+    await enableMultiTabIndexedDbPersistence(db);
+    console.log("Firestore persistence enabled.");
+  } catch (err: any) {
+    console.warn('Firestore persistence status:', err.message);
   }
-});
+};
+enablePersistence();
 
 export const auth = getAuth();
 
-// CRITICAL CONSTRAINT: Test connection on boot
-async function testConnection() {
-  try {
-    await getDocFromServer(doc(db, 'test', 'connection'));
-    console.log("Firestore connection successful.");
-  } catch (error) {
-    if (error instanceof Error && (error.message.includes('the client is offline') || error.message.includes('unavailable'))) {
-      console.error("Firestore connection issue: Please check your internet or Firebase project configuration.");
+// CRITICAL CONSTRAINT: Test connection on boot with retry
+async function testConnection(retries = 3) {
+  for (let i = 0; i < retries; i++) {
+    try {
+      await getDocFromServer(doc(db, 'test', 'connection'));
+      console.log("Firestore connection successful.");
+      return;
+    } catch (error: any) {
+      console.warn(`Connection attempt ${i + 1} failed:`, error.message);
+      if (i === retries - 1) {
+        if (error.message.includes('the client is offline') || error.message.includes('unavailable')) {
+          console.error("Firestore connection issue: Please check your internet or Firebase project configuration.");
+        }
+      }
+      // Wait before retry
+      await new Promise(resolve => setTimeout(resolve, 2000 * (i + 1)));
     }
   }
 }

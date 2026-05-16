@@ -15,7 +15,7 @@ import {
   Plus,
   FileText,
   Sparkles,
-  Bot,
+  Bot as BotIcon,
   Clock,
   Route,
   Smartphone
@@ -57,11 +57,12 @@ export const Sidebar = ({
     { id: 'fuel', label: 'Combustível', icon: Fuel },
     { id: 'maintenance', label: 'Manutenção', icon: Wrench },
     { id: 'staff', label: 'Equipe', icon: Users },
+    { id: 'users', label: 'Usuários', icon: Users },
     { id: 'trips', label: 'Viagens', icon: TrendingUp },
     { id: 'os', label: 'OS de Viagem', icon: FileText },
     { id: 'inventory', label: 'Almoxarifado', icon: Package },
     { id: 'reports', label: 'Relatórios', icon: Bell },
-    { id: 'ai-consultant', label: 'Consultor IA', icon: Bot },
+    { id: 'ai-consultant', label: 'Consultor IA', icon: BotIcon },
     { id: 'creacao', label: 'Criação', icon: Sparkles },
   ];
 
@@ -170,24 +171,12 @@ export const Sidebar = ({
               </div>
             </div>
             <div className="flex gap-2">
-              {isInstallable && (
-                <button 
-                  onClick={onInstall}
-                  className="flex-1 flex items-center justify-center gap-2 px-4 py-4 bg-emerald-500 hover:bg-emerald-400 text-asphalt-950 rounded-2xl font-black text-[9px] transition-all active:scale-95 uppercase tracking-widest animate-pulse shadow-lg shadow-emerald-500/20"
-                >
-                  <Smartphone size={14} strokeWidth={2.5} />
-                  App Pro
-                </button>
-              )}
               <button 
                 onClick={handleShareApp}
-                className={cn(
-                  "flex items-center justify-center gap-2 px-4 py-4 bg-asphalt-900 hover:bg-sky-blue text-zinc-500 hover:text-asphalt-950 rounded-2xl font-black text-[9px] transition-all active:scale-95 border border-white/5 hover:border-transparent uppercase tracking-widest group",
-                  isInstallable ? "w-16" : "flex-1"
-                )}
+                className="flex-1 flex items-center justify-center gap-2 px-4 py-4 bg-asphalt-900 hover:bg-sky-blue text-zinc-500 hover:text-asphalt-950 rounded-2xl font-black text-[9px] transition-all active:scale-95 border border-white/5 hover:border-transparent uppercase tracking-widest group"
               >
                 <Share2 size={16} strokeWidth={2.5} />
-                {!isInstallable && "ID"}
+                ID Digital
               </button>
               <button 
                 onClick={logout}

@@ -33,8 +33,7 @@ import {
 } from 'lucide-react';
 import { Button, ConfirmModal } from './UI';
 import { Vehicle, Employee, Trip, Passenger } from '../types';
-import { cn } from '../lib/utils';
-import { GoogleGenAI, Type } from "@google/genai";
+import { cn, getApiUrl } from '../lib/utils';
 import { toast } from 'sonner';
 
 interface TripFormProps {
@@ -114,37 +113,21 @@ export const TripForm = ({ vehicles, employees, initialData, initialAttachments,
   const handleSmartExtractFromAttachment = async (attachment: { name: string, url: string, type: string }, index: number) => {
     setProcessingAttachmentIndex(index);
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-
       // Extract base64 and mimeType
       const [header, base64Data] = attachment.url.split(',');
       const mimeType = header.match(/:(.*?);/)?.[1] || 'image/jpeg';
 
-      const prompt = "Extraia a lista de passageiros deste documento. Retorne um JSON com um array de objetos contendo 'name' (NOME COMPLETO EM MAIÚSCULAS) e 'document' (CPF ou RG). Se não houver documento, use 'S/D'. Ignore cabeçalhos ou informações não relacionadas a passageiros.";
-
-      const result = await (ai as any).models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: [
-          {
-            role: "user",
-            parts: [
-              { text: prompt },
-              {
-                inlineData: {
-                  data: base64Data,
-                  mimeType
-                }
-              }
-            ]
-          }
-        ],
-        config: {
-          responseMimeType: "application/json"
-        }
+      const response = await fetch(getApiUrl("/api/extract-passengers"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ base64Data, mimeType }),
       });
 
-      const responseText = result.text();
-      const extractedData = JSON.parse(responseText);
+      if (!response.ok) {
+        throw new Error("Failed to extract passengers");
+      }
+
+      const extractedData = await response.json();
 
       if (extractedData && Array.isArray(extractedData)) {
         const newPassengers = extractedData.map((p: any) => ({
@@ -370,41 +353,17 @@ export const TripForm = ({ vehicles, employees, initialData, initialAttachments,
 
     setIsSmartProcessing(true);
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-      
-      const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: `Extraia as informações desta viagem do seguinte texto: "${smartText}"`,
-        config: {
-          systemInstruction: "Você é um assistente de logística que extrai dados de viagens. Formate as datas como string ISO (YYYY-MM-DDTHH:mm). Se não encontrar um campo, deixe vazio. Normalize nomes para MAIÚSCULAS.",
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              title: { type: Type.STRING },
-              origin: { type: Type.STRING },
-              destination: { type: Type.STRING },
-              startDate: { type: Type.STRING, description: "Data de partida em ISO format YYYY-MM-DDTHH:mm" },
-              endDate: { type: Type.STRING, description: "Data de retorno em ISO format YYYY-MM-DDTHH:mm" },
-              tripType: { type: Type.STRING, enum: ["state", "interstate", "mercosur"] },
-              notes: { type: Type.STRING },
-              passengers: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    name: { type: Type.STRING },
-                    document: { type: Type.STRING }
-                  },
-                  required: ["name"]
-                }
-              }
-            }
-          }
-        }
+      const response = await fetch(getApiUrl("/api/smart-fill"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: smartText }),
       });
 
-      const result = JSON.parse(response.text);
+      if (!response.ok) {
+        throw new Error("Failed to smart fill");
+      }
+
+      const result = await response.json();
       
       setFormData(prev => ({
         ...prev,

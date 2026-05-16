@@ -10,6 +10,7 @@ import {
   Clock,
   Navigation,
   BarChart3,
+  DollarSign,
   ClipboardCheck,
   CheckCircle2,
   AlertCircle,
@@ -294,10 +295,11 @@ export const VehicleDetail = memo(({ vehicle, maintenanceHistory, fuelHistory, e
       </div>
 
       {/* Stats Grid */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
         {[
           { label: 'Capacidade', value: `${vehicle.capacity} PAX`, icon: Users },
           { label: 'Km Atual', value: `${vehicle.currentOdometer.toLocaleString()} KM`, icon: Navigation },
+          { label: 'Custo Manut.', value: `R$ ${vehicleMaintenance.reduce((sum, m) => sum + (m.cost || 0), 0).toLocaleString()}`, icon: DollarSign },
           { label: 'Ano Fab.', value: vehicle.factoryYear, icon: Calendar },
           { label: 'Tipo', value: vehicle.type === 'van' ? 'VAN' : 'ÔNIBUS', icon: Hash },
         ].map((stat, i) => (
@@ -463,13 +465,17 @@ export const VehicleDetail = memo(({ vehicle, maintenanceHistory, fuelHistory, e
                       </div>
                       <div>
                         <p className="text-[10px] font-black text-white uppercase">{m.description}</p>
-                        <p className="text-[9px] text-zinc-500 font-black uppercase mt-1">{format(parseISO(m.scheduledDate), 'dd MMM yyyy')}</p>
+                        <p className="text-[9px] text-zinc-500 font-black uppercase mt-1">
+                          {m.completedAt 
+                            ? `Concluída em ${format(parseISO(m.completedAt), 'dd MMM yyyy')}` 
+                            : `Agendada para ${format(parseISO(m.scheduledDate), 'dd MMM yyyy')}`}
+                        </p>
                       </div>
                     </div>
                     <div className="flex items-center gap-4">
                       <div className="text-right">
                         <p className="text-xs font-black text-brand-accent tabular-nums">R$ {m.cost.toLocaleString()}</p>
-                        <span className="text-[8px] text-zinc-600 font-black uppercase tracking-widest">Custo Total</span>
+                        <span className="text-[8px] text-zinc-600 font-black uppercase tracking-widest">{m.status === 'completed' ? 'Custo Real' : 'Est. Custo'}</span>
                       </div>
                       <button 
                         onClick={() => {

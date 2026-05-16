@@ -23,13 +23,25 @@ export default defineConfig(({mode}) => {
           icons: [
             {
               src: 'logo_dm.svg',
-              sizes: 'any',
+              sizes: '192x192',
               type: 'image/svg+xml',
               purpose: 'any'
             },
             {
               src: 'logo_dm.svg',
-              sizes: 'any',
+              sizes: '512x512',
+              type: 'image/svg+xml',
+              purpose: 'any'
+            },
+            {
+              src: 'logo_dm.svg',
+              sizes: '1024x1024',
+              type: 'image/svg+xml',
+              purpose: 'any'
+            },
+            {
+              src: 'logo_dm.svg',
+              sizes: '192x192',
               type: 'image/svg+xml',
               purpose: 'maskable'
             }
@@ -72,12 +84,9 @@ export default defineConfig(({mode}) => {
       })
     ],
     base: './',
-    define: {
-      'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY),
-    },
     resolve: {
       alias: {
-        '@': path.resolve(__dirname, '.'),
+        '@': path.resolve(__dirname, './src'),
       },
     },
     build: {
@@ -94,7 +103,6 @@ export default defineConfig(({mode}) => {
       }
     },
     server: {
-      // Do not modifyâfile watching is disabled to prevent flickering during agent edits.
       port: 3000,
       host: '0.0.0.0',
     },
