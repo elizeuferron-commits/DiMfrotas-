@@ -18,10 +18,12 @@
     "types": ["vite/client"],
     "paths": {
       "@/*": [
-        "./*"
+        "./src/*"
       ]
     },
     "allowImportingTsExtensions": true,
     "noEmit": true
-  }
+  },
+  "include": ["src", "server.ts"],
+  "exclude": ["node_modules", "build", "android"]
 }

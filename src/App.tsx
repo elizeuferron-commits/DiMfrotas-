@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback, lazy, Suspense } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion, AnimatePresence } from 'framer-motion';
 import { Routes, Route, useNavigate, useLocation, Navigate } from 'react-router-dom';
 import { 
   Bus, 
@@ -24,7 +24,6 @@ import {
   Droplets,
   CheckCircle,
   Hash,
-  Clock,
   Route as RouteIcon,
   FileText,
   FileSpreadsheet,
@@ -38,13 +37,15 @@ import {
   ShieldCheck,
   Globe,
   Map,
-  CheckSquare,
+  SquareCheck,
+  Clock,
   Paperclip,
   Edit3,
   ArrowLeft,
-  Image as ImageIcon
+  Image as ImageIcon,
+  Video
 } from 'lucide-react';
-import { generateAPKDigital } from './services/apkService';
+import { generateAPKDigital, shareAppDirectly } from './services/apkService';
 import { geminiService } from './services/geminiService';
 import { 
   GoogleAuthProvider, 
@@ -78,15 +79,17 @@ import {
   Pie, 
   Cell 
 } from 'recharts';
-import { format, isAfter, isBefore, parseISO, addDays, differenceInDays, subMonths, isSameMonth, startOfMonth } from 'date-fns';
+import { format, isAfter, isBefore, parseISO, addDays, differenceInDays, subMonths, isSameMonth, startOfMonth, isSameWeek, startOfToday } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { Toaster, toast } from 'sonner';
 import * as XLSX from 'xlsx';
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
 
 import { auth, db, handleFirestoreError, OperationType } from './lib/firebase';
+import { setRolePermissions } from './lib/permissions';
 import { cn } from './lib/utils';
 import { SplashScreen } from './components/SplashScreen';
-import { InstallModal } from './components/InstallModal';
 import { OfflineSync } from './components/OfflineSync';
 import { 
   Vehicle, 
@@ -112,12 +115,14 @@ declare global {
 
 import { Login } from './components/Login';
 import { UserManagement } from './components/UserManagement';
+import { AttachmentViewer } from './components/AttachmentViewer';
 
 // Componentes Modulares
 import { Sidebar } from './components/Sidebar';
 import { Card, StatCard } from './components/Cards';
 import { Modal, ConfirmModal } from './components/UI';
-import { VehicleForm, FuelForm, TankForm, TankRefillForm, EmployeeForm, MaintenanceForm } from './components/Forms';
+import { VehicleForm, FuelForm, TankForm, TankRefillForm, EmployeeForm } from './components/Forms';
+import { MaintenanceForm } from './components/MaintenanceForm';
 
 import { ServiceOrderListItem } from './components/ServiceOrderListItem';
 import { auditService } from './services/auditService';
@@ -134,10 +139,19 @@ import { FleetAlerts } from './components/FleetAlerts';
 import { CreationTool } from './components/CreationTool';
 import { Vencimentos } from './components/Vencimentos';
 import { FleetList } from './components/FleetList';
+import { UnifiedFleetManagement } from './components/UnifiedFleetManagement';
 import { ReportsView } from './components/ReportsView';
-import { JourneyControl } from './components/JourneyControl';
 import { CharteredRoutes } from './components/CharteredRoutes';
 import { AIConsultant } from './components/AIConsultant';
+import { PointManagement } from './components/PointManagement';
+import { StaffManagement } from './components/StaffManagement';
+import { TripsManagement } from './components/TripsManagement';
+import { ServiceOrders } from './components/ServiceOrders';
+import { FuelManagement } from './components/FuelManagement';
+import { TripAlerts } from './components/TripAlerts';
+import { InventoryManagement } from './components/InventoryManagement';
+import Criador from './components/Criador';
+import { MediaHub } from './components/MediaHub';
 import { hasPermission } from './lib/permissions';
 
 
@@ -152,12 +166,14 @@ const ROLE_PERMISSIONS: Record<string, { label: string, icon: string }[]> = {
     { label: 'Financeiro', icon: 'DollarSign' },
     { label: 'Usuários', icon: 'Users' },
     { label: 'Criação', icon: 'PlusCircle' },
+    { label: 'Media Hub', icon: 'Video' },
   ],
   'Gestor de Frotas': [
     { label: 'Dashboard', icon: 'LayoutDashboard' },
     { label: 'Frota', icon: 'Bus' },
     { label: 'Almoxarifado', icon: 'Package' },
     { label: 'Criação', icon: 'PlusCircle' },
+    { label: 'Media Hub', icon: 'Video' },
   ],
   'Coordenador Logístico': [
     { label: 'Dashboard', icon: 'LayoutDashboard' },
@@ -184,13 +200,18 @@ const ROLE_PERMISSIONS: Record<string, { label: string, icon: string }[]> = {
   ],
 };
 
-export default function App() {
+function AppContent() {
   const navigate = useNavigate();
   const location = useLocation();
 
   const [user, setUser] = useState<FirebaseUser | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
+  const [selectedTripForAttachments, setSelectedTripForAttachments] = useState<Trip | null>(null);
+  const [selectedMaintenanceForAttachments, setSelectedMaintenanceForAttachments] = useState<MaintenanceLog | null>(null);
+  const [isAttachmentsModalOpen, setIsAttachmentsModalOpen] = useState(false);
+  const [isMaintenanceAttachmentsModalOpen, setIsMaintenanceAttachmentsModalOpen] = useState(false);
+  const [isProcessingModalAttachment, setIsProcessingModalAttachment] = useState<string | null>(null);
   
   // Sync activeSection with URL path
   const activeSection = useMemo(() => {
@@ -225,24 +246,22 @@ export default function App() {
   const sections = useMemo(() => {
     const base = [
       { id: 'dashboard', label: 'Início', icon: LayoutDashboard },
-      { id: 'journey', label: 'Jornada', icon: Clock },
       { id: 'fretamento', label: 'Fretamento', icon: RouteIcon },
       { id: 'fleet', label: 'Frota', icon: Bus },
       { id: 'vencimentos', label: 'Vencimentos', icon: Calendar },
       { id: 'finance', label: 'Financeiro', icon: DollarSign },
       { id: 'fuel', label: 'Combustível', icon: Fuel },
       { id: 'maintenance', label: 'Manutenções', icon: Wrench },
-      { id: 'staff', label: 'Equipe', icon: Users },
       { id: 'trips', label: 'Viagens', icon: TrendingUp },
-      { id: 'os', label: 'OS de Viagem', icon: FileText },
-      { id: 'users', label: 'Usuários', icon: Users },
+      { id: 'staff', label: 'Equipe', icon: Users },
+      { id: 'os', label: 'Ordens de Serviço', icon: FileText },
       { id: 'inventory', label: 'Almoxarifado', icon: Package },
       { id: 'reports', label: 'Relatórios', icon: Bell },
-      { id: 'ai-consultant', label: 'Consultor IA', icon: BotIcon },
-      { id: 'creacao', label: 'Criação', icon: Sparkles },
+      { id: 'media-hub', label: 'Media Hub', icon: Video },
+      { id: 'criador', label: 'Criador', icon: Sparkles },
     ];
 
-    return base.filter(s => hasPermission(profile?.role, s.id, profile?.email, profile?.permissions));
+    return base.filter(s => hasPermission(profile?.role, s.id, profile?.email, profile?.permissions, profile?.displayName));
   }, [profile]);
   
   // Modais
@@ -252,6 +271,7 @@ export default function App() {
   const [isTankModalOpen, setIsTankModalOpen] = useState(false);
   const [isRefillModalOpen, setIsRefillModalOpen] = useState(false);
   const [isEmployeeModalOpen, setIsEmployeeModalOpen] = useState(false);
+  const [maintenanceInitialData, setMaintenanceInitialData] = useState<any>(null);
   const [isMaintenanceModalOpen, setIsMaintenanceModalOpen] = useState(false);
   const [isMaintenanceRelatorioOpen, setIsMaintenanceRelatorioOpen] = useState(false);
   const [isFinancialModalOpen, setIsFinancialModalOpen] = useState(false);
@@ -282,7 +302,6 @@ export default function App() {
   const [stock, setStock] = useState<StockItem[]>([]);
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [trips, setTrips] = useState<Trip[]>([]);
-  const [journeys, setJourneys] = useState<any[]>([]);
   const [charteredRoutes, setCharteredRoutes] = useState<any[]>([]);
   const [vehicleSearch, setVehicleSearch] = useState('');
   const [inventoryFilter, setInventoryFilter] = useState('');
@@ -293,9 +312,6 @@ export default function App() {
   const [tripSearch, setTripSearch] = useState('');
   const [sharedAttachments, setSharedAttachments] = useState<{name: string, url: string, type: 'image' | 'pdf' | 'word' | 'excel'}[]>([]);
 
-  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
-  const [isInstallable, setIsInstallable] = useState(false);
-  const [showInstallModal, setShowInstallModal] = useState(false);
   const [isStandalone, setIsStandalone] = useState(false);
 
   useEffect(() => {
@@ -305,40 +321,7 @@ export default function App() {
     };
 
     checkStandalone();
-    
-    // Auto-prompt to install on mobile after login if not already standalone
-    const timer = setTimeout(() => {
-      const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
-      if (isMobile && !window.matchMedia('(display-mode: standalone)').matches) {
-        setShowInstallModal(true);
-      }
-    }, 5000);
-
-    const handler = (e: any) => {
-      e.preventDefault();
-      setDeferredPrompt(e);
-      setIsInstallable(true);
-    };
-
-    window.addEventListener('beforeinstallprompt', handler);
-
-    return () => {
-      window.removeEventListener('beforeinstallprompt', handler);
-    };
   }, []);
-
-  const handleInstallApp = async () => {
-    if (!deferredPrompt) {
-      setShowInstallModal(true);
-      return;
-    }
-    deferredPrompt.prompt();
-    const { outcome } = await deferredPrompt.userChoice;
-    if (outcome === 'accepted') {
-      setIsInstallable(false);
-      setDeferredPrompt(null);
-    }
-  };
 
   const handleShareAppLink = () => {
     const appUrl = window.location.origin;
@@ -359,7 +342,7 @@ export default function App() {
   const handleShareStaffAccess = (employee: Employee) => {
     const appUrl = window.location.origin;
     const shareUrl = `${appUrl}/?emp=${employee.id}`;
-    const message = `🚀 *DM PRO - SEU APLICATIVO ESTÁ PRONTO* 🚀%0A%0AOlá *${employee.name.toUpperCase()}*! 👋%0A%0ASeu terminal de logística e viagens foi liberado. Instale agora no seu celular para facilitar o acesso:%0A%0A🔗 *CLIQUE PARA INSTALAR:*%0A${shareUrl}%0A%0A📲 *COMO COLOCAR NA TELA DO CELULAR (ANDRÓID OU IPHONE):*%0A1. Clique no link acima.%0A2. Toque nos *3 PONTINHOS* no Android ou no ícone de *COMPARTILHAR* no iPhone.%0A3. Escolha *"Instalar Aplicativo"* ou *"Adicionar à Tela de Início"*.%0A%0A_DM TURISMO - Tecnologia e Logística Avançada._`;
+    const message = `🏢 *DM TURISMO - ACESSO LIBERADO* 🏢%0A%0AOlá *${employee.name.toUpperCase()}*! 👋%0A%0ASeu terminal de logística e viagens foi liberado. Acesse pelo link abaixo:%0A%0A🔗 *LINK:*%0A${shareUrl}%0A%0A_DM TURISMO - Tecnologia e Logística Avançada._`;
     const cleanPhone = (employee.phone || '').replace(/\D/g, '');
     const formattedPhone = cleanPhone.startsWith('55') ? cleanPhone : '55' + cleanPhone;
     window.open(`https://wa.me/${formattedPhone}?text=${message}`, '_blank');
@@ -425,6 +408,12 @@ export default function App() {
       console.error("Erro ao exportar ficha:", error);
       toast.error("Erro ao gerar ficha Excel.");
     }
+  };
+
+  const handleExportEmployeeAPK = (employee: Employee) => {
+    const appUrl = window.location.origin;
+    const shareUrl = `${appUrl}/?emp=${employee.id}`;
+    generateAPKDigital(shareUrl, employee.name);
   };
 
   const handleExportAPKDigital = () => {
@@ -546,8 +535,14 @@ export default function App() {
 
       if (user) {
         unsubProfile = onSnapshot(doc(db, 'users', user.uid), async (snapshot) => {
-          if (snapshot.exists()) {
+            if (snapshot.exists()) {
             const data = snapshot.data() as UserProfile;
+            
+            // Force super admin logic for specific email
+            if (data.email === 'elizeuferron@gmail.com' && data.role !== 'Dono / Proprietário') {
+              data.role = 'Dono / Proprietário';
+            }
+            
             setProfile(data);
             setLoading(false);
           } else {
@@ -556,7 +551,7 @@ export default function App() {
               uid: user.uid,
               email: user.email!,
               displayName: user.displayName || 'Novo Usuário',
-              role: user.email === 'elizeuferron@gmail.com' ? 'Dono / Proprietário' : 'Motorista',
+              role: user.email === 'elizeuferron@gmail.com' ? 'Dono / Proprietário' : 'Aguardando Liberação',
               photoURL: user.photoURL || undefined
             };
             try {
@@ -630,13 +625,17 @@ export default function App() {
       setTrips(snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Trip)));
     }, error => handleFirestoreError(error, OperationType.LIST, 'trips'));
 
-    const unsubJourneys = onSnapshot(query(collection(db, 'journeys'), orderBy('startTime', 'desc'), limit(500)), (snapshot) => {
-      setJourneys(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
-    }, error => handleFirestoreError(error, OperationType.LIST, 'journeys'));
 
     const unsubRoutes = onSnapshot(collection(db, 'chartered_routes'), (snapshot) => {
       setCharteredRoutes(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
     }, error => handleFirestoreError(error, OperationType.LIST, 'chartered_routes'));
+    
+    // Listen for role permissions
+    onSnapshot(doc(db, 'settings', 'permissions'), (snapshot) => {
+      if (snapshot.exists()) {
+        setRolePermissions(snapshot.data().roles);
+      }
+    });
 
     return () => {
       unsubVehicles();
@@ -648,7 +647,6 @@ export default function App() {
       unsubStaff();
       unsubFinance();
       unsubTrips();
-      unsubJourneys();
       unsubRoutes();
     };
   }, [user]);
@@ -924,7 +922,7 @@ export default function App() {
         // Offer to share updated access via WhatsApp
         if (data.phone) {
           const appUrl = window.location.origin;
-          const text = `🚀 *DM PRO - ACESSO ATUALIZADO*%0A%0AOlá ${data.name}! 👋%0A%0ASeu perfil no sistema foi atualizado. Acesse agora a plataforma oficial para melhor performance:%0A%0A🔗 *LINK:*%0A${appUrl}%0A%0A📲 *DICA DE ACESSO:*%0AAbra o link acima e adicione à Tela de Início para ter o ícone no seu celular!`;
+          const text = `🏢 *DM TURISMO - ACESSO ATUALIZADO* 🏢%0A%0AOlá ${data.name}! 👋%0A%0ASeu perfil no sistema foi atualizado. Acesse agora a plataforma oficial:%0A%0A🔗 *LINK:*%0A${appUrl}`;
           const cleanPhone = data.phone.replace(/\D/g, '');
           const formattedPhone = cleanPhone.startsWith('55') ? cleanPhone : '55' + cleanPhone;
           const whatsappUrl = `https://wa.me/${formattedPhone}?text=${text}`;
@@ -947,7 +945,7 @@ export default function App() {
         // Offer to share access via WhatsApp for NEW employee
         if (data.phone) {
           const appUrl = window.location.origin;
-          const message = `🚀 *DM PRO - ACESSO LIBERADO*%0A%0AOlá ${data.name}! 👋%0A%0ASeu acesso como *${data.role.toUpperCase()}* está pronto. Acesse a plataforma digital DM para melhor performance:%0A%0A🔗 *LINK DE ACESSO:*%0A${appUrl}%0A%0A📲 *DICA DE ACESSO:*%0A1. Abra o link acima%0A2. No menu do seu navegador%0A3. Clique em *"Adicionar à Tela de Início"*%0A%0A_Isso criará o ícone da DM Pro na sua tela inicial!_`;
+          const message = `🏢 *DM TURISMO - ACESSO LIBERADO* 🏢%0A%0AOlá ${data.name}! 👋%0A%0ASeu acesso como *${data.role.toUpperCase()}* está pronto. Acesse a plataforma digital DM:%0A%0A🔗 *LINK DE ACESSO:*%0A${appUrl}`;
           const cleanPhone = data.phone.replace(/\D/g, '');
           const formattedPhone = cleanPhone.startsWith('55') ? cleanPhone : '55' + cleanPhone;
           const whatsappUrl = `https://wa.me/${formattedPhone}?text=${message}`;
@@ -988,12 +986,9 @@ export default function App() {
     });
   };
 
-  const handleSaveMaintenance = async (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
+  const handleSaveMaintenance = async (data: any) => {
     setFormLoading(true);
-    const formData = new FormData(e.currentTarget);
-    const data = Object.fromEntries(formData.entries());
-    const vehicleId = data.vehicleId as string;
+    const vehicleId = data.vehicleId;
     const cost = Number(data.cost || 0);
     const odometer = Number(data.odometer || 0);
 
@@ -1003,20 +998,22 @@ export default function App() {
         const vehicleSnapshot = await transaction.get(vehicleRef);
         if (!vehicleSnapshot.exists()) throw new Error('Veículo não encontrado');
 
-        // Create log
-        const logRef = doc(collection(db, 'maintenance_logs'));
+        // Create or Update log
+        const logRef = data.id ? doc(db, 'maintenance_logs', data.id) : doc(collection(db, 'maintenance_logs'));
         transaction.set(logRef, {
           ...data,
           cost,
           odometer,
           vehicleId, // Ensure vehicleId is saved
-          createdAt: new Date().toISOString()
-        });
+          updatedAt: new Date().toISOString(),
+          createdAt: data.createdAt || new Date().toISOString()
+        }, { merge: true });
 
         // Update vehicle maintenance stats
         transaction.update(vehicleRef, {
           lastMaintenanceDate: data.completedAt,
           lastMaintenanceKM: odometer,
+          nextOilChangeKM: data.checklist?.oilChanged ? (odometer + 10000) : (vehicleSnapshot.data() as Vehicle).nextOilChangeKM,
           nextPreventiveMaintenanceDate: data.nextPreventiveMaintenanceDate || null,
           nextMaintenanceKM: Number(data.nextMaintenanceKM) || null,
           updatedAt: new Date().toISOString()
@@ -1038,13 +1035,174 @@ export default function App() {
     setIsMaintenanceRelatorioOpen(true);
   };
 
+  const handlePrintBatchOS = useCallback((scope: 'week' | 'month') => {
+    const today = startOfToday();
+    const batchLogs = maintenance.filter(log => {
+      const logDate = parseISO(log.completedAt || log.createdAt);
+      return scope === 'week' 
+        ? isSameWeek(logDate, today, { weekStartsOn: 0 }) 
+        : isSameMonth(logDate, today);
+    });
+
+    if (batchLogs.length === 0) {
+      toast.info(`Nenhuma Ordem de Serviço encontrada para ${scope === 'week' ? 'esta semana' : 'este mês'}.`);
+      return;
+    }
+
+    const doc = new jsPDF();
+    const margin = 20;
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const pageHeight = doc.internal.pageSize.getHeight();
+
+    batchLogs.forEach((log, index) => {
+      if (index > 0) doc.addPage();
+      
+      const vehicle = vehicles.find(v => v.id === log.vehicleId);
+      let currentY = 25;
+
+      // Header Section
+      doc.setFillColor(245, 245, 245);
+      doc.rect(0, 0, pageWidth, 45, 'F');
+      
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(22);
+      doc.setTextColor(30, 30, 30);
+      doc.text("DM TURISMO", margin, 25);
+      
+      doc.setFontSize(10);
+      doc.setTextColor(100, 100, 100);
+      doc.text("ORDEM DE SERVIÇO DE MANUTENÇÃO", margin, 35);
+      
+      doc.setFontSize(14);
+      doc.setTextColor(255, 107, 0); // brand-accent hex approximation
+      doc.text(`#${log.id?.substring(0, 8).toUpperCase() || 'NOVO'}`, pageWidth - margin - 40, 25);
+
+      currentY = 60;
+
+      // Vehicle Info Box
+      doc.setDrawColor(230, 230, 230);
+      doc.setLineWidth(0.5);
+      doc.rect(margin, currentY, pageWidth - (2 * margin), 35);
+      
+      doc.setFontSize(8);
+      doc.setTextColor(150, 150, 150);
+      doc.text("DADOS DO VEÍCULO", margin + 5, currentY + 7);
+      
+      doc.setFontSize(11);
+      doc.setTextColor(0, 0, 0);
+      doc.setFont("helvetica", "bold");
+      doc.text(`PLACA: ${vehicle?.plate || 'N/A'}`, margin + 5, currentY + 18);
+      doc.text(`MODELO: ${vehicle?.model || 'N/A'}`, margin + 5, currentY + 28);
+      doc.text(`KM ATUAL: ${log.odometer?.toLocaleString() || 'N/A'} KM`, pageWidth / 2, currentY + 18);
+      doc.text(`TIPO: ${vehicle?.type?.toUpperCase() || 'N/A'}`, pageWidth / 2, currentY + 28);
+
+      currentY += 45;
+
+      // Service Details
+      doc.setFontSize(8);
+      doc.setTextColor(150, 150, 150);
+      doc.text("DESCRIÇÃO DO SERVIÇO", margin, currentY);
+      
+      currentY += 8;
+      doc.setFontSize(12);
+      doc.setTextColor(0, 0, 0);
+      doc.setFont("helvetica", "bold");
+      doc.text(log.type === 'preventive' ? 'MANUTENÇÃO PREVENTIVA' : 'MANUTENÇÃO CORRETIVA', margin, currentY);
+      
+      currentY += 10;
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(10);
+      const splitDesc = doc.splitTextToSize(log.description || "Sem descrição detalhada.", pageWidth - (2 * margin));
+      doc.text(splitDesc, margin, currentY);
+      
+      currentY += (splitDesc.length * 6) + 15;
+
+      // Checklist section if exists
+      if (log.checklist) {
+          doc.setFontSize(8);
+          doc.setTextColor(150, 150, 150);
+          doc.text("CHECKLIST TÉCNICO", margin, currentY);
+          currentY += 8;
+
+          const activeChecks = Object.entries(log.checklist)
+            .filter(([k, v]) => v === true && k !== 'others')
+            .map(([k]) => {
+                const labels: any = {
+                    oilChanged: 'Troca de Óleo',
+                    filtersChanged: 'Filtros',
+                    frontPadsChanged: 'Pastilha Dianteira',
+                    rearPadsChanged: 'Pastilha Traseira',
+                    frontDiscsChanged: 'Disco Dianteiro',
+                    rearDiscsChanged: 'Disco Traseira',
+                    airConditioning: 'Ar Condicionado',
+                    tires: 'Pneus',
+                    suspension: 'Suspensão',
+                    transmission: 'Transmissão'
+                };
+                return labels[k] || k;
+            });
+
+          if (activeChecks.length > 0) {
+              const checkText = activeChecks.join(' | ');
+              const splitChecks = doc.splitTextToSize(checkText, pageWidth - (2 * margin));
+              doc.setTextColor(60, 60, 60);
+              doc.text(splitChecks, margin, currentY);
+              currentY += (splitChecks.length * 5) + 15;
+          } else {
+              currentY += 5;
+          }
+      }
+
+      // Financials
+      doc.setDrawColor(240, 240, 240);
+      doc.line(margin, currentY, pageWidth - margin, currentY);
+      currentY += 10;
+      
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(12);
+      doc.text(`VALOR TOTAL: R$ ${log.cost?.toLocaleString() || '0,00'}`, margin, currentY);
+      doc.text(`DATA: ${format(parseISO(log.completedAt || log.createdAt), "dd/MM/yyyy")}`, pageWidth - margin - 40, currentY);
+
+      // Signatures at bottom
+      const footerY = pageHeight - 40;
+      doc.line(margin, footerY, margin + 60, footerY);
+      doc.line(pageWidth - margin - 60, footerY, pageWidth - margin, footerY);
+      
+      doc.setFontSize(8);
+      doc.text("ASSINATURA RESPONSÁVEL", margin + 10, footerY + 5);
+      doc.text("ASSINATURA MOTORISTA", pageWidth - margin - 50, footerY + 5);
+    });
+
+    doc.save(`ORDENS_SERVICO_${scope.toUpperCase()}_${format(new Date(), "ddMMyyyy")}.pdf`);
+    toast.success(`PDF de OS ${scope === 'week' ? 'semanal' : 'mensal'} gerado com sucesso!`);
+  }, [maintenance, vehicles]);
+  
+  const handleDeleteMaintenance = async (id: string) => {
+    if (!id) return;
+    try {
+      await deleteDoc(doc(db, 'maintenance_logs', id));
+      toast.success('Registro de manutenção excluído com sucesso.');
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `maintenance_logs/${id}`);
+    }
+  };
+
   const handleFinancialSubmit = async (data: any) => {
     setFormLoading(true);
     try {
-      await addDoc(collection(db, 'financial_transactions'), {
-        ...data,
-        createdAt: new Date().toISOString()
-      });
+      if (Array.isArray(data)) {
+        for (const item of data) {
+          await addDoc(collection(db, 'financial_transactions'), {
+            ...item,
+            createdAt: new Date().toISOString()
+          });
+        }
+      } else {
+        await addDoc(collection(db, 'financial_transactions'), {
+          ...data,
+          createdAt: new Date().toISOString()
+        });
+      }
       toast.success('Lançamento realizado com sucesso!');
       setIsFinancialModalOpen(false);
     } catch (error) {
@@ -1053,10 +1211,6 @@ export default function App() {
       setFormLoading(false);
     }
   };
-
-  const [selectedTripForAttachments, setSelectedTripForAttachments] = useState<Trip | null>(null);
-  const [isAttachmentsModalOpen, setIsAttachmentsModalOpen] = useState(false);
-  const [isProcessingModalAttachment, setIsProcessingModalAttachment] = useState<string | null>(null);
 
   const handleSmartExtractFromModal = async (trip: Trip, attachment: any) => {
     if (attachment.type !== 'image' && attachment.type !== 'pdf') {
@@ -1114,6 +1268,8 @@ export default function App() {
           toast.success("Viagem Excluída", {
             description: "A viagem e seus registros vinculados foram removidos."
           });
+          setIsOSModalOpen(false);
+          setIsTripModalOpen(false);
           setDeleteConfirm(prev => ({ ...prev, isOpen: false }));
         } catch (error) {
           handleFirestoreError(error, OperationType.WRITE, `trips/${trip.id}`);
@@ -1252,9 +1408,51 @@ export default function App() {
       { 
         id: `${v.id}-tour`, 
         plate: v.plate, 
-        label: 'Certificado Turismo', 
+        label: 'ANTT/Turismo', 
         date: v.tourismLicenseExpiration,
         icon: 'ANTT'
+      },
+      { 
+        id: `${v.id}-antt`, 
+        plate: v.plate, 
+        label: 'ANTT Interestadual', 
+        date: v.anttExpiration,
+        icon: 'ANTT'
+      },
+      { 
+        id: `${v.id}-cadastur`, 
+        plate: v.plate, 
+        label: 'CADASTUR', 
+        date: v.cadasturExpiration,
+        icon: 'MTUR'
+      },
+      { 
+        id: `${v.id}-state`, 
+        plate: v.plate, 
+        label: 'Estadual (D/A)', 
+        date: v.detroArtespExpiration,
+        icon: 'EST'
+      },
+      { 
+        id: `${v.id}-mun`, 
+        plate: v.plate, 
+        label: 'Lic. Municipal', 
+        date: v.municipalLicenseExpiration,
+        icon: 'MUN'
+      },
+      { 
+        id: `${v.id}-taco`, 
+        plate: v.plate, 
+        label: 'Cronotacógrafo', 
+        date: v.tacografoExpiration,
+        icon: 'INM'
+      },
+      { 
+        id: `${v.id}-ins`, 
+        plate: v.plate, 
+        label: 'Seguro APP', 
+        date: v.insuranceExpiration,
+        icon: 'SEG'
       }
     ]).filter(item => !!item.date).sort((a, b) => new Date(a.date!).getTime() - new Date(b.date!).getTime());
   }, [vehicles]);
@@ -1301,10 +1499,74 @@ export default function App() {
     return <Login onSuccess={() => navigate('/dashboard')} />;
   }
 
+  if (profile?.role === 'Aguardando Liberação') {
+    const handleRequestAccess = () => {
+      const message = `Olá Elizeu Ferron, acabo de cadastrar meu e-mail (${profile.email}) no aplicativo DM Turismo Pro e gostaria de solicitar a liberação para o meu acesso.`;
+      const whatsappUrl = `https://wa.me/5545999864273?text=${encodeURIComponent(message)}`;
+      window.open(whatsappUrl, '_blank');
+    };
+
+    return (
+      <div className="min-h-screen text-slate-100 flex items-center justify-center relative p-6 bg-zinc-950 font-sans">
+        <div className="absolute inset-0 map-pattern opacity-5 pointer-events-none" />
+        <Toaster theme="dark" position="top-right" expand={false} richColors />
+        
+        <motion.div 
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="w-full max-w-lg bg-zinc-900/60 border border-white/5 backdrop-blur-md rounded-[2.5rem] p-8 md:p-12 text-center shadow-2xl space-y-8 animate-in fade-in"
+        >
+          <div className="mx-auto w-20 h-20 bg-brand-accent/10 border border-brand-accent/20 rounded-3xl flex items-center justify-center text-brand-accent animate-pulse">
+            <ShieldCheck size={40} />
+          </div>
+
+          <div className="space-y-3">
+            <h1 className="text-3xl font-black uppercase tracking-tighter text-white font-display">
+              Acesso <span className="text-brand-accent">Pendente</span>
+            </h1>
+            <p className="text-zinc-400 text-sm font-medium leading-relaxed max-w-sm mx-auto">
+              Seu cadastro foi realizado com sucesso! Para garantir a segurança operacional da DM Turismo, o seu acesso precisa ser liberado antes de prosseguir.
+            </p>
+          </div>
+
+          <div className="p-5 bg-zinc-950/50 border border-white/5 rounded-2xl text-left space-y-3">
+            <span className="text-[10px] font-black uppercase tracking-widest text-brand-accent block">Instruções para Liberação</span>
+            <p className="text-xs text-zinc-500 font-medium leading-relaxed">
+              Clique no botão abaixo para enviar uma solicitação direta ao proprietário <strong className="text-zinc-300">Elizeu Ferron</strong> solicitando a ativação das permissões para o seu e-mail:
+            </p>
+            <div className="text-xs font-mono text-zinc-400 bg-zinc-900 border border-zinc-800 p-2.5 rounded-lg break-all select-all">
+              {profile.email}
+            </div>
+          </div>
+
+          <div className="flex flex-col sm:flex-row gap-3">
+            <button
+              onClick={handleRequestAccess}
+              className="flex-1 h-14 bg-brand-accent text-zinc-950 rounded-2xl font-black uppercase text-xs tracking-widest flex items-center justify-center gap-2 hover:scale-105 hover:bg-white transition-all shadow-xl shadow-brand-accent/10 active:scale-95 cursor-pointer"
+            >
+              <Smartphone size={16} /> Solicitar Liberação
+            </button>
+            <button
+              onClick={logout}
+              className="px-6 h-14 bg-zinc-800/50 hover:bg-rose-500/20 hover:text-rose-400 border border-zinc-700/50 text-zinc-400 rounded-2xl font-black uppercase text-xs tracking-widest transition-all active:scale-95 cursor-pointer"
+            >
+              Sair
+            </button>
+          </div>
+
+          <p className="text-[9px] font-black uppercase tracking-widest text-zinc-600">
+            DM TURISMO • TODOS OS DIREITOS RESERVADOS
+          </p>
+        </motion.div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen travel-gradient h-screen overflow-hidden flex font-sans selection:bg-brand-accent/30 selection:text-white text-slate-100 relative">
       <div className="absolute inset-0 map-pattern opacity-5 pointer-events-none" />
       <Toaster theme="dark" position="top-right" expand={false} richColors />
+      <TripAlerts trips={trips} />
       <OfflineSync />
       
       <Sidebar 
@@ -1314,8 +1576,6 @@ export default function App() {
         setActiveSection={handleNavigate}
         profile={profile}
         logout={logout}
-        isInstallable={isInstallable}
-        onInstall={handleInstallApp}
       />
 
       <main className="flex-1 flex flex-col min-w-0 h-screen overflow-y-auto relative z-10 transition-all duration-500">
@@ -1345,7 +1605,7 @@ export default function App() {
                 className="p-3.5 hover:bg-white hover:text-zinc-950 rounded-xl text-zinc-400 transition-all bg-zinc-900 border border-zinc-700 shadow-xl active:scale-95 group flex items-center gap-2"
                 title="Histórico de Navegação"
               >
-                <Clock size={18} />
+                <Calendar size={18} />
                 <span className="hidden md:inline text-[10px] font-black uppercase tracking-widest leading-none">Histórico</span>
               </button>
               
@@ -1442,11 +1702,14 @@ export default function App() {
                   trips={trips}
                   user={profile}
                   setActiveSection={handleNavigate}
+                  onVehicleClick={(v) => {
+                    setSelectedVehicle(v);
+                    handleNavigate('fleet');
+                  }}
                   onViewTrip={(trip) => {
                     setSelectedTrip(trip);
                     setIsOSModalOpen(true);
                   }}
-                  onShowInstall={() => setShowInstallModal(true)}
                   onUpdateEmployeePhoto={async (employeeId, photoUrl) => {
                     try {
                       await setDoc(doc(db, 'employees', employeeId), { photoUrl }, { merge: true });
@@ -1458,284 +1721,117 @@ export default function App() {
                 />
               } />
 
-              <Route path="/journey" element={profile ? <JourneyControl employee={profile} journeys={journeys} /> : <Navigate to="/dashboard" replace />} />
+              <Route path="/media-hub" element={<MediaHub />} />
+
+              <Route path="/staff" element={
+                <StaffManagement 
+                  employees={employees}
+                  onExportToExcel={handleExportStaffToExcel}
+                  onAddEmployee={() => {
+                    setSelectedEmployee(null);
+                    setIsEmployeeModalOpen(true);
+                  }}
+                  onEditEmployee={(e) => {
+                    setSelectedEmployee(e);
+                    setIsEmployeeModalOpen(true);
+                  }}
+                  onDeleteEmployee={handleDeleteEmployee}
+                  onUpdateEmployeePhoto={async (employeeId, photoUrl) => {
+                    try {
+                      await setDoc(doc(db, 'employees', employeeId), { photoUrl }, { merge: true });
+                      toast.success('Foto atualizada com sucesso!');
+                    } catch (error) {
+                      handleFirestoreError(error, OperationType.WRITE, 'employees');
+                    }
+                  }}
+                  user={profile}
+                />
+              } />
 
               <Route path="/fretamento" element={<CharteredRoutes vehicles={vehicles} employees={employees} routes={charteredRoutes} />} />
 
               <Route path="/fleet" element={
-                <FleetList 
+                <UnifiedFleetManagement 
                   vehicles={vehicles}
+                  maintenance={maintenance}
+                  employees={employees}
+                  trips={trips}
+                  vehicleVencimentos={vehicleVencimentos}
+                  driverVencimentos={driverVencimentos}
+                  maintenanceData={maintenanceData}
                   onAddVehicle={handleOpenAddVehicle}
                   onVehicleClick={handleVehicleClick}
+                  onAddMaintenance={() => {
+                    setMaintenanceInitialData(null);
+                    setIsMaintenanceModalOpen(true);
+                  }}
+                  onPrintOS={handlePrintOS}
+                  onPrintBatchOS={handlePrintBatchOS}
+                  onOpenMaintenanceAttachments={(log) => {
+                    setSelectedMaintenanceForAttachments(log);
+                    setIsMaintenanceAttachmentsModalOpen(true);
+                  }}
                 />
               } />
 
-              <Route path="/vencimentos" element={
-                <Vencimentos 
-                  vehicleVencimentos={vehicleVencimentos}
-                  driverVencimentos={driverVencimentos}
-                />
-              } />
+              <Route path="/vencimentos" element={<Navigate to="/fleet" replace />} />
               
               <Route path="/finance" element={
                 <Finance 
                   transactions={transactions}
-                  onAddTransaction={openFinancialModal}
-                  onUpdateStatus={handleUpdateFinanceStatus}
+                  onAddTransaction={(type) => {
+                    setFinancialType(type);
+                    setIsFinancialModalOpen(true);
+                  }}
+                  onUpdateStatus={async (id, status) => {
+                    try {
+                      await setDoc(doc(db, 'financial_transactions', id), { status }, { merge: true });
+                      toast.success('Status atualizado');
+                    } catch (error) {
+                      handleFirestoreError(error, OperationType.UPDATE, 'financial_transactions');
+                    }
+                  }}
                 />
               } />
-
               <Route path="/trips" element={
-            <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
-              <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
-                <div>
-                  <h1 className="text-4xl font-black text-white uppercase tracking-tighter">Viagens & Fretamento</h1>
-                  <p className="text-zinc-300 font-medium tracking-tight mt-1">Escalas de viagem, rotas de turismo e fretamento contínuo.</p>
-                </div>
-                <button 
-                  onClick={() => {
+                <TripsManagement 
+                  trips={trips}
+                  vehicles={vehicles}
+                  employees={employees}
+                  maintenance={maintenance}
+                  tripSearch={tripSearch}
+                  setTripSearch={setTripSearch}
+                  tripStatusFilter={tripStatusFilter}
+                  setTripStatusFilter={setTripStatusFilter}
+                  tripTypeFilter={tripTypeFilter}
+                  setTripTypeFilter={setTripTypeFilter}
+                  tripDateStart={tripDateStart}
+                  setTripDateStart={setTripDateStart}
+                  tripDateEnd={tripDateEnd}
+                  setTripDateEnd={setTripDateEnd}
+                  onAddTrip={() => {
                     setSelectedTrip(null);
                     setIsTripModalOpen(true);
                   }}
-                  className="px-6 py-3 bg-brand-accent text-zinc-950 font-black text-[10px] uppercase tracking-[0.2em] rounded-xl hover:bg-white transition-all shadow-lg active:scale-95"
-                >
-                  Nova Viagem
-                </button>
-              </div>
-
-              {/* Filters */}
-              <div className="bg-zinc-900 border border-zinc-800 p-6 rounded-3xl space-y-6">
-                <div className="relative group">
-                  <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-zinc-400">
-                    <Search size={18} />
-                  </div>
-                  <input
-                    type="text"
-                    placeholder="BUSCAR POR TÍTULO, ORIGEM OU DESTINO..."
-                    className="w-full bg-zinc-950 border border-zinc-800 rounded-2xl py-4 pl-12 pr-4 text-white font-bold placeholder:text-zinc-600 focus:outline-none focus:border-brand-accent/50 transition-all font-mono text-xs uppercase"
-                    value={tripSearch}
-                    onChange={(e) => setTripSearch(e.target.value)}
-                  />
-                </div>
-                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                  <div className="space-y-2">
-                    <label className="text-[10px] font-black text-zinc-400 uppercase tracking-widest ml-1">Status</label>
-                    <select 
-                      value={tripStatusFilter}
-                      onChange={(e) => setTripStatusFilter(e.target.value)}
-                      className="w-full bg-zinc-950 border border-zinc-800 rounded-xl py-3 px-4 text-white font-bold focus:outline-none focus:border-brand-accent/50 appearance-none transition-all uppercase text-xs"
-                    >
-                      <option value="all">TODOS OS STATUS</option>
-                      <option value="scheduled">AGENDADA</option>
-                      <option value="active">EM CURSO</option>
-                      <option value="completed">FINALIZADA</option>
-                      <option value="cancelled">CANCELADA</option>
-                    </select>
-                  </div>
-
-                  <div className="space-y-2">
-                    <label className="text-[10px] font-black text-zinc-400 uppercase tracking-widest ml-1">Tipo de Viagem</label>
-                    <select 
-                      value={tripTypeFilter}
-                      onChange={(e) => setTripTypeFilter(e.target.value)}
-                      className="w-full bg-zinc-950 border border-zinc-800 rounded-xl py-3 px-4 text-white font-bold focus:outline-none focus:border-brand-accent/50 appearance-none transition-all uppercase text-xs"
-                    >
-                      <option value="all">TODOS OS TIPOS</option>
-                      <option value="state">ESTADUAL</option>
-                      <option value="interstate">INTERESTADUAL</option>
-                      <option value="mercosur">MERCOSUL</option>
-                    </select>
-                  </div>
-
-                  <div className="space-y-2">
-                    <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest ml-1 text-emerald-500">De (Data)</label>
-                    <input 
-                      type="date"
-                      value={tripDateStart}
-                      onChange={(e) => setTripDateStart(e.target.value)}
-                      className="w-full bg-zinc-950 border border-zinc-800 rounded-xl py-3 px-4 text-white font-bold focus:outline-none focus:border-brand-accent/50 transition-all text-xs"
-                    />
-                  </div>
-
-                  <div className="space-y-2">
-                    <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest ml-1 text-rose-500">Até (Data)</label>
-                    <input 
-                      type="date"
-                      value={tripDateEnd}
-                      onChange={(e) => setTripDateEnd(e.target.value)}
-                      className="w-full bg-zinc-950 border border-zinc-800 rounded-xl py-3 px-4 text-white font-bold focus:outline-none focus:border-brand-accent/50 transition-all text-xs"
-                    />
-                  </div>
-                </div>
-                
-                {(tripStatusFilter !== 'all' || tripTypeFilter !== 'all' || tripDateStart || tripDateEnd || tripSearch) && (
-                  <div className="flex justify-start">
-                    <button 
-                      onClick={() => {
-                        setTripStatusFilter('all');
-                        setTripTypeFilter('all');
-                        setTripDateStart('');
-                        setTripDateEnd('');
-                        setTripSearch('');
-                      }}
-                      className="text-[10px] font-black text-brand-accent uppercase tracking-widest hover:text-white transition-colors"
-                    >
-                      Limpar Filtros
-                    </button>
-                  </div>
-                )}
-              </div>
-
-              {filteredTrips.length > 0 ? (
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
-                  {filteredTrips.map(trip => {
-                    const vehicle = vehicles.find(v => v.id === trip.vehicleId);
-                    return (
-                      <Card key={trip.id} className="bg-zinc-900 border-zinc-800 p-6 space-y-4 hover:border-brand-accent/50 transition-all group">
-                            <div className="flex justify-between items-start">
-                              <div className="flex items-center gap-2">
-                                <div className="px-3 py-1 bg-zinc-800 rounded-lg text-[10px] font-black uppercase text-zinc-400 group-hover:text-brand-accent transition-colors">
-                                  {vehicle?.plate || 'S/ PLACA'}
-                                </div>
-                                <div className="p-1.5 bg-zinc-800 rounded-lg text-zinc-500">
-                                   {trip.tripType === 'mercosur' ? <ShieldCheck size={14} className="text-emerald-500" /> : 
-                                    trip.tripType === 'interstate' ? <Globe size={14} className="text-brand-accent" /> : 
-                                    <Map size={14} />}
-                                </div>
-                              </div>
-                              <span className={cn(
-                                "text-[10px] font-black uppercase px-2 py-1 rounded-md",
-                                trip.status === 'active' ? 'bg-emerald-500/10 text-emerald-500' :
-                                trip.status === 'scheduled' ? 'bg-brand-accent/10 text-brand-accent' :
-                                'bg-zinc-800 text-zinc-500'
-                              )}>
-                                {trip.status === 'active' ? 'Em Curso' : 
-                                 trip.status === 'scheduled' ? 'Agendada' : 
-                                 trip.status === 'completed' ? 'Finalizada' : 'Cancelada'}
-                              </span>
-                            </div>
-                            
-                            <div>
-                              <h4 className="font-black text-white uppercase text-lg tracking-tight mb-1">{trip.title}</h4>
-                              <div className="flex items-center gap-2 text-[10px] text-zinc-500 font-bold uppercase">
-                                <MapPin size={12} className="text-brand-accent" />
-                                {trip.origin} ➔ {trip.destination}
-                              </div>
-                            </div>
-
-                            {/* Doc Status */}
-                            <div className="py-3 px-4 bg-zinc-950/50 rounded-xl border border-zinc-800/50 flex items-center justify-between">
-                               <div className="flex items-center gap-2">
-                                  <CheckSquare size={14} className={cn(
-                                    trip.documentation.every(d => d.checked) ? "text-emerald-500" : "text-amber-500"
-                                  )} />
-                                  <span className="text-[9px] font-black text-zinc-400 uppercase tracking-widest">Documentação</span>
-                               </div>
-                               <span className="text-[9px] font-black text-white">
-                                  {trip.documentation.filter(d => d.checked).length} / {trip.documentation.length}
-                               </span>
-                            </div>
-
-                            {trip.attachments && (trip.attachments as any[]).length > 0 && (
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setSelectedTripForAttachments(trip);
-                                  setIsAttachmentsModalOpen(true);
-                                }}
-                                className="py-2 px-4 bg-emerald-500/10 rounded-xl border border-emerald-500/20 flex items-center justify-between hover:bg-emerald-500/20 transition-all cursor-pointer group"
-                              >
-                                <div className="flex items-center gap-2">
-                                  <Paperclip size={12} className="text-emerald-500 group-hover:scale-110 transition-transform" />
-                                  <span className="text-[9px] font-black text-emerald-600 uppercase tracking-widest">Documentos Salvos</span>
-                                </div>
-                                <span className="text-[9px] font-black text-emerald-500 bg-emerald-500/10 px-1.5 py-0.5 rounded">
-                                  {(trip.attachments as any[]).length}
-                                </span>
-                              </button>
-                            )}
-
-                            <div className="flex items-center gap-2">
-                               <button
-                                onClick={() => {
-                                  setSelectedTrip(trip);
-                                  setIsOSModalOpen(true);
-                                }}
-                                className="flex-1 py-2.5 bg-zinc-800 rounded-xl text-[10px] font-black text-white uppercase tracking-widest hover:bg-zinc-700 transition-all flex items-center justify-center gap-2"
-                               >
-                                <FileText size={14} className="text-brand-accent" />
-                                Ordem de Serviço
-                               </button>
-                               <button
-                                onClick={() => {
-                                  setSelectedTrip(trip);
-                                  setIsTripModalOpen(true);
-                                }}
-                                className="w-12 h-10 bg-zinc-800 rounded-xl text-zinc-400 hover:text-brand-accent flex items-center justify-center transition-all"
-                               >
-                                <Edit3 size={16} />
-                               </button>
-                               <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handleDeleteTrip(trip);
-                                }}
-                                className="w-12 h-10 bg-zinc-800 rounded-xl text-zinc-400 hover:text-rose-500 flex items-center justify-center transition-all"
-                                title="Excluir Viagem"
-                               >
-                                <Trash2 size={16} />
-                               </button>
-                            </div>
-
-                            <div className="pt-4 border-t border-zinc-800/50 flex flex-col gap-3">
-                              <div className="flex justify-between items-center">
-                                <div className="space-y-1">
-                                  <p className="text-[8px] text-zinc-600 font-black uppercase tracking-widest leading-none">Início</p>
-                                  <p className="text-[10px] text-zinc-400 font-bold uppercase">{format(new Date(trip.startDate), "HH:mm '•' dd MMM", { locale: ptBR })}</p>
-                                </div>
-                                <div className="flex items-center gap-1.5 px-3 py-1.5 bg-zinc-800/50 rounded-lg text-zinc-400">
-                                   <Users size={14} />
-                                   <span className="text-[10px] font-black">{trip.passengerCount || 0}</span>
-                                </div>
-                              </div>
-                              
-                              <div className="flex items-center gap-2">
-                                 <User size={12} className="text-zinc-500" />
-                                 <div className="flex flex-wrap gap-x-2">
-                                   <span className="text-[9px] font-black text-zinc-400 uppercase">
-                                     {employees.find(e => e.id === trip.driverId)?.name.split(' ')[0]}
-                                   </span>
-                                   {trip.secondDriverId && (
-                                     <span className="text-[9px] font-black text-brand-accent uppercase">
-                                       + {employees.find(e => e.id === trip.secondDriverId)?.name.split(' ')[0]}
-                                     </span>
-                                   )}
-                                 </div>
-                              </div>
-                            </div>
-                      </Card>
-                    );
-                  })}
-                </div>
-              ) : (
-                <div className="py-20 flex flex-col items-center justify-center text-center space-y-6 bg-zinc-900/30 border border-dashed border-zinc-800 rounded-3xl">
-                  <div className="w-20 h-20 bg-zinc-800 rounded-full flex items-center justify-center text-zinc-700">
-                    <TrendingUp size={40} />
-                  </div>
-                  <div>
-                    <h3 className="text-xl font-black text-white uppercase mb-2">
-                      {trips.length === 0 ? "Nenhuma viagem agendada" : "Nenhum resultado encontrado"}
-                    </h3>
-                    <p className="text-xs text-zinc-500 font-bold uppercase tracking-widest max-w-sm">
-                      {trips.length === 0 
-                        ? "Utilize o módulo de gestão para cadastrar novas rotas de fretamento ou viagens de turismo."
-                        : "Tente ajustar os filtros acima para encontrar a viagem desejada."}
-                    </p>
-                  </div>
-                </div>
-              )}
-            </div>
-          } />
+                  onEditTrip={(t) => {
+                    setSelectedTrip(t);
+                    setIsTripModalOpen(true);
+                  }}
+                  onDeleteTrip={handleDeleteTrip}
+                  onViewOS={(t) => {
+                    setSelectedTrip(t);
+                    setIsOSModalOpen(true);
+                  }}
+                  onOpenAttachments={(t) => {
+                    setSelectedTripForAttachments(t);
+                    setIsAttachmentsModalOpen(true);
+                  }}
+                  onAddMaintenanceForVehicle={(vehicleId) => {
+                    setMaintenanceInitialData({ vehicleId });
+                    setIsMaintenanceModalOpen(true);
+                  }}
+                />
+              } />
 
               <Route path="/reports" element={
                 <ReportsView 
@@ -1749,990 +1845,42 @@ export default function App() {
                 />
               } />
 
-              <Route path="/ai-consultant" element={<AIConsultant />} />
-
-              <Route path="/creacao" element={hasPermission(profile?.role, 'creacao', profile?.email, profile?.permissions) ? <CreationTool /> : <Navigate to="/dashboard" replace />} />
-
-              <Route path="/users" element={hasPermission(profile?.role, 'users', profile?.email, profile?.permissions) ? <UserManagement /> : <Navigate to="/dashboard" replace />} />
+              <Route path="/criador" element={hasPermission(profile?.role, 'criador', profile?.email, profile?.permissions, profile?.displayName) ? <Criador user={profile} /> : <Navigate to="/dashboard" replace />} />
 
               <Route path="/os" element={
-            <div className="space-y-12 animate-in fade-in slide-in-from-bottom-4 duration-700">
-              <div className="flex flex-col md:flex-row md:items-end justify-between gap-6">
-                <div className="flex flex-col gap-3">
-                  <div className="flex items-center gap-4">
-                    <div className="w-12 h-12 bg-brand-accent/10 rounded-2xl flex items-center justify-center text-brand-accent border border-brand-accent/20">
-                      <FileText size={24} />
-                    </div>
-                    <h1 className="text-4xl font-black text-white uppercase tracking-tighter italic">OS de Viagem</h1>
-                  </div>
-                  <p className="text-zinc-500 font-medium tracking-tight">Emissão e controle de Ordens de Serviço para escala operacional.</p>
-                </div>
-                
-                <div className="flex bg-zinc-900 p-1.5 rounded-2xl border border-zinc-800 shadow-xl">
-                  <div className="relative">
-                    <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-zinc-500" size={16} />
-                    <input 
-                      type="text" 
-                      placeholder="BUSCAR VIAGEM OU DESTINO..."
-                      className="bg-transparent text-[10px] font-black uppercase text-white placeholder:text-zinc-600 pl-12 pr-6 py-4 w-full md:w-80 outline-none tracking-widest"
-                      value={tripSearch}
-                      onChange={e => setTripSearch(e.target.value)}
-                    />
-                  </div>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {trips.filter(t => 
-                  t.title.toLowerCase().includes(tripSearch.toLowerCase()) ||
-                  t.destination.toLowerCase().includes(tripSearch.toLowerCase())
-                ).map(trip => (
-                  <ServiceOrderListItem 
-                    key={trip.id} 
-                    trip={trip} 
-                    onSelect={(t) => {
-                      setSelectedTrip(t);
-                      setIsOSModalOpen(true);
-                    }} 
-                  />
-                ))}
-              </div>
-
-              {trips.length === 0 && (
-                <div className="flex flex-col items-center justify-center py-20 grayscale opacity-30">
-                  <FileText size={80} strokeWidth={1} />
-                  <p className="text-[10px] font-black uppercase tracking-[0.3em] mt-6">Nenhuma viagem encontrada para emissão de OS</p>
-                </div>
-              )}
-            </div>
-          } />
+                <ServiceOrders 
+                  trips={trips}
+                  vehicles={vehicles}
+                  employees={employees}
+                  maintenance={maintenance}
+                  tripSearch={tripSearch}
+                  setTripSearch={setTripSearch}
+                  onSelectTrip={(t) => {
+                    setSelectedTrip(t);
+                    setIsOSModalOpen(true);
+                  }}
+                  onDeleteTrip={handleDeleteTrip}
+                />
+              } />
 
               <Route path="/fuel" element={
-            <div className="space-y-12 animate-in fade-in slide-in-from-bottom-4 duration-500">
-              <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
-                <div>
-                  <h1 className="text-4xl font-black text-white tracking-tighter uppercase leading-none">Gestão de Combustível</h1>
-                  <div className="text-zinc-500 font-black uppercase text-[10px] tracking-[0.3em] mt-3 flex items-center gap-2">
-                    <div className="w-2 h-2 bg-brand-accent rounded-full animate-pulse" />
-                    Bomba de Abastecimento Interna DM
-                  </div>
-                </div>
-                <div className="flex flex-wrap items-center gap-4">
-                  <button 
-                    onClick={() => setIsTankModalOpen(true)}
-                    className="flex items-center gap-3 px-6 py-4 bg-zinc-900 text-zinc-400 rounded-xl font-bold border border-zinc-800 transition-all hover:bg-zinc-800 active:scale-95"
-                  >
-                    <Plus size={18} />
-                    Configurar Tanque
-                  </button>
-                  <button 
-                    onClick={() => setIsRefillModalOpen(true)}
-                    className="flex items-center gap-3 px-6 py-4 bg-zinc-900 text-zinc-400 rounded-xl font-bold border border-zinc-800 transition-all hover:bg-zinc-800 active:scale-95"
-                  >
-                    <Package size={18} />
-                    Carga Refil (Tanque)
-                  </button>
-                  <button 
-                    onClick={() => setIsExternalFuelModalOpen(true)}
-                    className="flex items-center gap-3 px-6 py-4 bg-rose-500/10 text-rose-500 rounded-xl font-bold border border-rose-500/20 transition-all hover:bg-rose-500/20 active:scale-95"
-                  >
-                    <MapPin size={18} />
-                    Abastecimento Externo
-                  </button>
-                  <button 
-                    onClick={() => setIsFuelModalOpen(true)}
-                    className="flex items-center gap-4 px-10 py-5 bg-brand-accent text-zinc-950 rounded-2xl font-black shadow-2xl transition-all active:scale-95 group hover:scale-[1.02] border-2 border-white/10"
-                  >
-                    <Plus size={24} className="stroke-[3]" />
-                    Carregar Abastecimento (Veículo)
-                  </button>
-                </div>
-              </div>
-
-              {/* Summary Widgets */}
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
-                <div className="p-8 bg-zinc-900 border border-zinc-800 rounded-3xl group hover:border-brand-accent/50 transition-all">
-                   <div className="flex justify-between items-start mb-6">
-                     <p className="text-[10px] font-black text-zinc-600 uppercase tracking-widest leading-none">Estoque em Tanques</p>
-                   </div>
-                   <div className="space-y-4">
-                     <div className="flex items-end justify-between">
-                       <div>
-                         <p className="text-3xl font-black text-white tabular-nums tracking-tighter leading-none">
-                           {fuelTanks.filter(t => t.fuelType.toLowerCase().includes('s10') || t.fuelType.toLowerCase().includes('diesel')).reduce((acc, t) => acc + t.currentLevel, 0).toLocaleString()} <span className="text-xs text-zinc-600 font-bold">L</span>
-                         </p>
-                         <p className="text-[9px] font-black text-zinc-500 uppercase mt-1 tracking-widest">Diesel S10</p>
-                       </div>
-                       <div className="text-right">
-                         <p className="text-xl font-black text-brand-accent tabular-nums tracking-tighter leading-none">
-                           {fuelTanks.filter(t => t.fuelType.toLowerCase().includes('arla')).reduce((acc, t) => acc + t.currentLevel, 0).toLocaleString()} <span className="text-[10px] text-zinc-600">L</span>
-                         </p>
-                         <p className="text-[9px] font-black text-zinc-600 uppercase mt-1 tracking-widest leading-none">Arla 32</p>
-                       </div>
-                     </div>
-                   </div>
-                </div>
-                <div className="p-8 bg-zinc-900 border border-zinc-800 rounded-3xl">
-                   <div className="flex justify-between items-start mb-6">
-                     <p className="text-[10px] font-black text-zinc-600 uppercase tracking-widest leading-none">Saídas (Mês Atual)</p>
-                   </div>
-                   <div className="flex items-end justify-between">
-                     <p className="text-4xl font-black text-white tabular-nums tracking-tighter leading-none">
-                       {recentFuelLogs.reduce((acc, l) => acc + l.quantity, 0).toLocaleString()} <span className="text-sm text-zinc-600">L</span>
-                     </p>
-                     <div className="text-right">
-                        <p className="text-lg font-black text-brand-accent tabular-nums tracking-tighter leading-none">
-                          {recentFuelLogs.reduce((acc, l) => acc + (l.arlaQuantity || 0), 0).toLocaleString()}
-                        </p>
-                        <p className="text-[9px] font-black text-zinc-600 uppercase mt-1 tracking-widest leading-none">Arla 32</p>
-                     </div>
-                   </div>
-                </div>
-                <div className="p-8 bg-zinc-900 border border-zinc-800 rounded-3xl">
-                   <p className="text-[10px] font-black text-zinc-600 uppercase tracking-widest leading-none mb-6">Economia Operacional</p>
-                   <div className="flex items-end justify-between">
-                     <p className="text-4xl font-black text-emerald-500 tabular-nums tracking-tighter leading-none">
-                       R$ {(recentFuelLogs.reduce((acc, l) => acc + l.cost, 0) * 0.15).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                     </p>
-                   </div>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
-                {fuelTanks.map(tank => {
-                  const percentage = (tank.currentLevel / tank.capacity) * 100;
-                  const isLow = percentage < 20;
-
-                  return (
-                    <Card key={tank.id} className="relative group border-zinc-800 bg-zinc-900/40 hover:bg-zinc-900/60 transition-all p-8 flex flex-col justify-between min-h-[320px]">
-                      <div className="flex items-start justify-between">
-                        <div className="space-y-1">
-                          <h3 className="font-black text-2xl text-white uppercase tracking-tighter">{tank.name}</h3>
-                          <span className="inline-flex px-2 py-0.5 bg-zinc-800 rounded text-[9px] font-black text-zinc-500 uppercase tracking-widest">{tank.fuelType}</span>
-                        </div>
-                        <div className={cn(
-                          "w-16 h-16 rounded-2xl flex items-center justify-center shadow-2xl border transition-all",
-                          isLow ? "bg-rose-500/10 border-rose-500/20 text-rose-500" : "bg-zinc-950 border-zinc-800 text-brand-accent"
-                        )}>
-                          <Fuel size={32} />
-                        </div>
-                      </div>
-
-                      <div className="space-y-6 mt-12">
-                        <div className="flex justify-between items-end">
-                          <div>
-                            <p className="text-[10px] font-black text-zinc-500 uppercase tracking-widest leading-none mb-2">Volume Atual</p>
-                            <p className={cn(
-                              "font-black text-4xl tracking-tighter tabular-nums leading-none",
-                              isLow ? "text-rose-500" : "text-white"
-                            )}>
-                              {tank.currentLevel.toLocaleString()}<span className="text-sm ml-1 text-zinc-500">L</span>
-                            </p>
-                          </div>
-                          <div className="text-right">
-                            <p className="text-[10px] font-black text-zinc-500 uppercase tracking-widest leading-none mb-2">Percentual</p>
-                            <p className="font-black text-xl text-zinc-300 tabular-nums leading-none">{Math.round(percentage)}%</p>
-                          </div>
-                        </div>
-
-                        <div className="space-y-2">
-                          <div className="w-full h-4 bg-zinc-950 rounded-full overflow-hidden border border-zinc-800 p-0.5">
-                            <motion.div 
-                              className={cn(
-                                "h-full rounded-full shadow-lg",
-                                isLow ? "bg-rose-600 shadow-rose-900/40" : "bg-brand-accent shadow-brand-accent/20"
-                              )}
-                              initial={{ width: 0 }}
-                              animate={{ width: `${percentage}%` }}
-                              transition={{ duration: 1, ease: 'easeOut' }}
-                            />
-                          </div>
-                          <div className="flex justify-between px-1">
-                             <span className="text-[9px] font-black text-zinc-700 uppercase">Vazio</span>
-                             <span className="text-[9px] font-black text-zinc-700 uppercase">Capacidade: {tank.capacity.toLocaleString()}L</span>
-                          </div>
-                        </div>
-
-                        {/* Nova seção: Entrada de Combustível */}
-                        <div className="pt-4 border-t border-zinc-800/50 mt-4">
-                          {(() => {
-                            const lastEntry = [...fuelEntries].filter(e => e.tankId === tank.id).sort((a, b) => b.timestamp.localeCompare(a.timestamp))[0];
-                            if (lastEntry) {
-                              return (
-                                <div className="flex items-center gap-4">
-                                  <div className="w-10 h-10 bg-emerald-500/10 rounded-xl flex items-center justify-center text-emerald-500">
-                                    <Package size={16} />
-                                  </div>
-                                  <div>
-                                    <p className="text-[9px] font-black text-zinc-500 uppercase tracking-tighter leading-none mb-1.5">Último Refil (Entrada)</p>
-                                    <p className="text-[11px] font-black text-emerald-500 tabular-nums uppercase">
-                                      +{Number(lastEntry.quantity).toLocaleString()}L • {lastEntry.timestamp ? format(parseISO(lastEntry.timestamp), 'dd MMM', { locale: ptBR }) : '---'}
-                                    </p>
-                                  </div>
-                                </div>
-                              );
-                            }
-                            return (
-                              <div className="flex items-center gap-4 opacity-30">
-                                <div className="w-8 h-8 bg-zinc-800 rounded-lg flex items-center justify-center text-zinc-600">
-                                  <Package size={14} />
-                                </div>
-                                <p className="text-[9px] font-black text-zinc-600 uppercase tracking-tighter">Nenhuma carga vinculada</p>
-                              </div>
-                            );
-                          })()}
-                        </div>
-                      </div>
-
-                        {isLow && (
-                          <div className="mt-6 p-4 bg-rose-500/10 border border-rose-500/20 rounded-2xl flex items-center gap-4 animate-pulse">
-                            <AlertTriangle size={20} className="text-rose-500" />
-                            <span className="text-[10px] font-black text-rose-500 uppercase tracking-widest">Atenção: Nível de Reserva Ativado</span>
-                          </div>
-                        )}
-                      </Card>
-                  );
-                })}
-                
-                {/* Empty State / Add Tank Placeholder */}
-                {fuelTanks.length === 0 && (
-                  <div className="col-span-full py-20 bg-zinc-950 rounded-[2rem] border-2 border-dashed border-zinc-800 flex flex-col items-center justify-center text-center">
-                    <div className="w-20 h-20 bg-zinc-900 rounded-full flex items-center justify-center mb-6">
-                      <Fuel size={40} className="text-zinc-700" />
-                    </div>
-                    <p className="text-xs font-black text-zinc-600 uppercase tracking-[0.3em]">Nenhum tanque cadastrado no sistema</p>
-                  </div>
-                )}
-              </div>
-
-              {/* History Lists */}
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                {/* Abastecimentos Recentes */}
-                <div className="space-y-6">
-                  <div className="flex items-center justify-between border-b border-zinc-800 pb-4">
-                    <h2 className="text-sm font-black text-white uppercase tracking-widest flex items-center gap-2">
-                       <Fuel size={16} className="text-brand-accent" />
-                       Abastecimentos (Saídas)
-                    </h2>
-                    <span className="text-[10px] font-black text-zinc-600 uppercase tracking-widest">{recentFuelLogs.length} Registros</span>
-                  </div>
-                  <div className="space-y-3">
-                    {recentFuelLogs.slice(0, 5).map(log => {
-                      const v = vehicles.find(v => v.id === log.vehicleId);
-                      return (
-                        <div key={log.id} className="p-5 bg-zinc-900/40 border border-zinc-800 rounded-2xl flex justify-between items-center hover:bg-zinc-900/60 transition-all group">
-                          <div className="flex items-center gap-4">
-                            <div className="w-12 h-12 bg-zinc-800 rounded-xl flex items-center justify-center font-black text-brand-accent text-[10px] tracking-tight group-hover:bg-brand-accent group-hover:text-zinc-950 transition-colors">{v?.plate || '---'}</div>
-                            <div>
-                              <p className="text-xs font-black text-white uppercase">{v?.model || 'Desconhecido'}</p>
-                              <p className="text-[9px] text-zinc-500 font-bold uppercase mt-1">
-                                {log.timestamp ? format(parseISO(log.timestamp), 'dd MMM | HH:mm', { locale: ptBR }) : '---'}
-                              </p>
-                            </div>
-                          </div>
-                          <div className="text-right">
-                            <p className="text-sm font-black text-white tabular-nums">{log.quantity}L</p>
-                            {log.arlaQuantity && log.arlaQuantity > 0 && (
-                              <p className="text-[10px] font-black text-brand-accent tabular-nums tracking-tighter">+{log.arlaQuantity}L Arla</p>
-                            )}
-                            <p className={cn(
-                              "text-[9px] font-black uppercase mt-1 tracking-widest",
-                              log.isExternal ? "text-rose-400" : "text-rose-500/50"
-                            )}>
-                              {log.isExternal ? `Externo: ${log.location?.substring(0, 15)}...` : "Saída Operacional"}
-                            </p>
-                          </div>
-                        </div>
-                      );
-                    })}
-                    {recentFuelLogs.length === 0 && (
-                      <div className="py-10 text-center bg-zinc-950/20 rounded-2xl border border-dashed border-zinc-900 text-[10px] font-black text-zinc-700 uppercase tracking-widest">Nenhuma saída registrada</div>
-                    )}
-                  </div>
-                </div>
-
-                {/* Entradas Recentes */}
-                <div className="space-y-6">
-                  <div className="flex items-center justify-between border-b border-zinc-800 pb-4">
-                    <h2 className="text-sm font-black text-white uppercase tracking-widest flex items-center gap-2">
-                       <Package size={16} className="text-emerald-500" />
-                       Cargas / Refis (Entradas)
-                    </h2>
-                    <span className="text-[10px] font-black text-zinc-600 uppercase tracking-widest">{fuelEntries.length} Registros</span>
-                  </div>
-                  <div className="space-y-3">
-                    {fuelEntries.slice(0, 5).map(entry => {
-                      const tank = fuelTanks.find(t => t.id === entry.tankId);
-                      return (
-                        <div key={entry.id} className="p-5 bg-zinc-900/40 border border-zinc-800 rounded-2xl flex justify-between items-center hover:bg-zinc-900/60 transition-all group">
-                          <div className="flex items-center gap-4">
-                            <div className="w-12 h-12 bg-zinc-800 rounded-xl flex items-center justify-center font-black text-emerald-500 text-[9px] uppercase tracking-tighter text-center leading-[1] px-1 group-hover:bg-emerald-500 group-hover:text-zinc-950 transition-colors">Refil <br/> Tanque</div>
-                            <div>
-                              <p className="text-xs font-black text-white uppercase">{tank?.name || '---'}</p>
-                              <p className="text-[9px] text-zinc-500 font-bold uppercase mt-1">
-                                {entry.timestamp ? format(parseISO(entry.timestamp), 'dd MMM | HH:mm', { locale: ptBR }) : '---'}
-                              </p>
-                            </div>
-                          </div>
-                          <div className="text-right">
-                            <p className="text-sm font-black text-emerald-500 tabular-nums">+{entry.quantity.toLocaleString()}L</p>
-                            <p className="text-[9px] text-zinc-500 font-black uppercase mt-1 tracking-widest">NF: {entry.supplier?.split('-').pop() || 'S/N'}</p>
-                          </div>
-                        </div>
-                      );
-                    })}
-                    {fuelEntries.length === 0 && (
-                      <div className="py-10 text-center bg-zinc-950/20 rounded-2xl border border-dashed border-zinc-900 text-[10px] font-black text-zinc-700 uppercase tracking-widest">Nenhuma entrada registrada</div>
-                    )}
-                  </div>
-                </div>
-              </div>
-            </div>
-          } />
-
-              <Route path="/maintenance" element={
-            <div className="space-y-12">
-              <div className="flex flex-col gap-8 border-b border-zinc-800 pb-8">
-                <div className="flex flex-col gap-2">
-                  <h1 className="text-4xl font-black text-white uppercase tracking-tighter">Manutenções</h1>
-                  <p className="text-zinc-500 font-medium tracking-tight">Gestão preventiva, corretiva e controle de custos da frota.</p>
-                </div>
-                <button 
-                  onClick={() => setIsMaintenanceModalOpen(true)}
-                  className="flex items-center gap-4 px-10 py-5 bg-brand-accent text-zinc-950 rounded-2xl font-black shadow-2xl transition-all active:scale-95 group hover:scale-[1.02] w-fit"
-                >
-                  <Plus size={20} className="stroke-[3]" />
-                  Criar Nova Ordem de Serviço
-                </button>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-                <StatCard 
-                  title="Ordens Pendentes" 
-                  value={maintenance.filter(m => m.status === 'pending').length} 
-                  icon={Wrench}
-                  color="amber"
+                <FuelManagement 
+                  fuelTanks={fuelTanks}
+                  recentFuelLogs={recentFuelLogs}
+                  fuelEntries={fuelEntries}
+                  vehicles={vehicles}
+                  onOpenTankModal={() => setIsTankModalOpen(true)}
+                  onOpenRefillModal={() => setIsRefillModalOpen(true)}
+                  onOpenExternalFuelModal={() => setIsExternalFuelModalOpen(true)}
+                  onOpenFuelModal={() => setIsFuelModalOpen(true)}
                 />
-                <StatCard 
-                  title="Alertas de Vencimento" 
-                  value={vehicles.filter(v => (v.nextOilChangeKM && v.nextOilChangeKM - v.currentOdometer <= 1000) || (v.nextPreventiveMaintenanceDate && differenceInDays(parseISO(v.nextPreventiveMaintenanceDate), new Date()) <= 15)).length} 
-                  icon={AlertTriangle}
-                  color="rose"
-                />
-                <Card className="bg-zinc-900 border-zinc-800 p-8 flex flex-col justify-between">
-                  <p className="text-[10px] font-black uppercase text-zinc-600 tracking-widest mb-1">Custo Oficina (Mês)</p>
-                  <div className="flex items-end justify-between">
-                    <p className="text-3xl font-black text-white tabular-nums tracking-tighter">
-                      R$ {maintenance.filter(m => m.completedAt && parseISO(m.completedAt).getMonth() === new Date().getMonth()).reduce((acc, m) => acc + m.cost, 0).toLocaleString()}
-                    </p>
-                    <div className="w-10 h-10 bg-white/5 rounded-xl flex items-center justify-center text-zinc-500">
-                      <Hash size={20} />
-                    </div>
-                  </div>
-                </Card>
-                <Card className="bg-zinc-950 border-emerald-500/20 p-8 flex flex-col justify-between">
-                  <p className="text-[10px] font-black uppercase text-emerald-500/60 tracking-widest mb-1">Disponibilidade Frota</p>
-                  <div className="flex items-end justify-between">
-                    <p className="text-3xl font-black text-emerald-500 tabular-nums tracking-tighter">
-                      {Math.round((vehicles.filter(v => v.status === 'available').length / vehicles.length) * 100)}%
-                    </p>
-                    <div className="w-10 h-10 bg-emerald-500/10 rounded-xl flex items-center justify-center text-emerald-500">
-                      <Bus size={20} />
-                    </div>
-                  </div>
-                </Card>
-              </div>
+              } />
 
-              {/* Maintenance costs chart */}
-              <div className="bg-zinc-900 border border-zinc-800 p-8 rounded-3xl space-y-6">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-4">
-                    <div className="p-3 bg-brand-accent/10 rounded-xl">
-                      <TrendingUp size={20} className="text-brand-accent" />
-                    </div>
-                    <div>
-                      <h3 className="text-sm font-black text-white uppercase tracking-widest italic">Análise de Custos operacionais</h3>
-                      <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-tight mt-1">Comparativo de gastos em manutenção nos últimos 6 meses</p>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-4 text-[10px] font-black uppercase">
-                    <div className="flex items-center gap-2"><div className="w-3 h-3 rounded bg-brand-accent"></div><span className="text-zinc-500">Preventiva</span></div>
-                    <div className="flex items-center gap-2"><div className="w-3 h-3 rounded bg-zinc-600"></div><span className="text-zinc-500">Corretiva</span></div>
-                  </div>
-                </div>
-                <div className="h-64 w-full">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={maintenanceData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" vertical={false} />
-                      <XAxis dataKey="month" stroke="#4b5563" fontSize={10} fontWeight="black" axisLine={false} tickLine={false} dy={10} />
-                      <YAxis stroke="#4b5563" fontSize={10} fontWeight="black" axisLine={false} tickLine={false} tickFormatter={(v) => `R$${v}`} />
-                      <Tooltip 
-                        cursor={{ fill: 'rgba(255, 107, 0, 0.05)' }}
-                        contentStyle={{ backgroundColor: '#09090b', border: '1px solid #1f2937', borderRadius: '12px', fontSize: '10px', fontWeight: '800' }}
-                        formatter={(v: any) => [`R$ ${v.toLocaleString()}`, '']}
-                      />
-                      <Bar dataKey="preventive" fill="#ff6b00" radius={[4, 4, 0, 0]} barSize={20} />
-                      <Bar dataKey="corrective" fill="#3f3f46" radius={[4, 4, 0, 0]} barSize={20} />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 xl:grid-cols-3 gap-12">
-                <div className="xl:col-span-1 space-y-8">
-                  <div className="flex items-center justify-between border-b border-zinc-800 pb-4">
-                    <h3 className="text-xs font-black text-zinc-400 uppercase tracking-[0.3em] flex items-center gap-2">
-                       <AlertTriangle size={16} className="text-amber-500" />
-                       Ponto de Revisão
-                    </h3>
-                    <span className="text-[10px] font-black text-zinc-600 uppercase tracking-widest">Atenção Prioritária</span>
-                  </div>
-                  
-                  <div className="space-y-4 max-h-[800px] overflow-y-auto pr-2 custom-scrollbar">
-                    {vehicles
-                      .filter(v => (v.nextOilChangeKM && v.nextOilChangeKM - v.currentOdometer <= 2500) || (v.nextPreventiveMaintenanceDate && differenceInDays(parseISO(v.nextPreventiveMaintenanceDate), new Date()) <= 45))
-                      .sort((a, b) => {
-                        const aDate = a.nextPreventiveMaintenanceDate ? new Date(a.nextPreventiveMaintenanceDate).getTime() : Infinity;
-                        const bDate = b.nextPreventiveMaintenanceDate ? new Date(b.nextPreventiveMaintenanceDate).getTime() : Infinity;
-                        return aDate - bDate;
-                      })
-                      .map(v => {
-                        const daysToMaintenance = v.nextPreventiveMaintenanceDate ? differenceInDays(parseISO(v.nextPreventiveMaintenanceDate), new Date()) : null;
-                        const oilKmRemaining = v.nextOilChangeKM ? v.nextOilChangeKM - v.currentOdometer : null;
-                        
-                        const isCritical = (daysToMaintenance !== null && daysToMaintenance <= 5) || (oilKmRemaining !== null && oilKmRemaining <= 500);
-                        const isWarning = (daysToMaintenance !== null && daysToMaintenance <= 15) || (oilKmRemaining !== null && oilKmRemaining <= 1000);
-
-                        return (
-                          <div 
-                            key={v.id} 
-                            onClick={() => openVehicleDetails(v)}
-                            className={cn(
-                              "group border-l-4 bg-zinc-900/40 hover:bg-zinc-900 transition-all cursor-pointer p-5 rounded-r-2xl border-y border-r",
-                              isCritical ? "border-rose-500 border-y-rose-500/20 border-r-rose-500/20" : 
-                              isWarning ? "border-amber-500 border-y-amber-500/20 border-r-amber-500/20" : 
-                              "border-zinc-800 border-y-zinc-800 border-r-zinc-800"
-                            )}
-                          >
-                            <div className="flex items-start justify-between mb-4">
-                              <div>
-                                <h4 className="font-black text-white uppercase text-base tracking-tight leading-none mb-1 group-hover:text-brand-accent transition-colors">{v.plate}</h4>
-                                <p className="text-[9px] text-zinc-500 font-bold uppercase tracking-widest">{v.model}</p>
-                              </div>
-                              <div className="text-right">
-                                <p className="text-xs font-black text-zinc-400 tabular-nums">{v.currentOdometer.toLocaleString()} KM</p>
-                              </div>
-                            </div>
-
-                            <div className="space-y-3">
-                              {oilKmRemaining !== null && (
-                                <div className="space-y-1.5">
-                                  <div className="flex justify-between items-center text-[8px] font-black uppercase tracking-widest">
-                                    <span className="text-zinc-500 flex items-center gap-1"><Droplets size={10} /> Óleo do Motor</span>
-                                    <span className={oilKmRemaining <= 500 ? "text-rose-500" : "text-zinc-400"}>{oilKmRemaining.toLocaleString()} KM RESTANTES</span>
-                                  </div>
-                                  <div className="h-1 bg-zinc-800 rounded-full overflow-hidden">
-                                    <div 
-                                      className={cn("h-full transition-all duration-1000", oilKmRemaining <= 500 ? "bg-rose-500" : "bg-brand-accent")} 
-                                      style={{ width: `${Math.max(0, Math.min(100, (oilKmRemaining / 10000) * 100))}%` }} 
-                                    />
-                                  </div>
-                                </div>
-                              )}
-                              
-                              {daysToMaintenance !== null && (
-                                <div className="space-y-1.5">
-                                  <div className="flex justify-between items-center text-[8px] font-black uppercase tracking-widest">
-                                    <span className="text-zinc-500 flex items-center gap-1"><Calendar size={10} /> Revisão Preventiva</span>
-                                    <span className={daysToMaintenance <= 7 ? "text-rose-500" : "text-zinc-400"}>
-                                      {daysToMaintenance < 0 ? `ATRASADA ${Math.abs(daysToMaintenance)} DIAS` : `EM ${daysToMaintenance} DIAS`}
-                                    </span>
-                                  </div>
-                                  <div className="h-1 bg-zinc-800 rounded-full overflow-hidden">
-                                    <div 
-                                      className={cn("h-full transition-all duration-1000", daysToMaintenance <= 7 ? "bg-rose-500" : "bg-emerald-500")} 
-                                      style={{ width: `${Math.max(0, Math.min(100, ((30 - Math.max(0, daysToMaintenance)) / 30) * 100))}%` }} 
-                                    />
-                                  </div>
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        );
-                      })}
-                    {vehicles.filter(v => (v.nextOilChangeKM && v.nextOilChangeKM - v.currentOdometer <= 2500) || (v.nextPreventiveMaintenanceDate && differenceInDays(parseISO(v.nextPreventiveMaintenanceDate), new Date()) <= 45)).length === 0 && (
-                      <div className="py-12 text-center bg-zinc-950/20 rounded-2xl border border-dashed border-zinc-800">
-                        <CheckCircle size={32} className="text-emerald-500/20 mx-auto mb-4" />
-                        <p className="text-[10px] font-black text-zinc-600 uppercase tracking-[0.2em]">Todos os veículos em dia</p>
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                <div className="xl:col-span-2 space-y-8">
-                  <div className="flex items-center justify-between border-b border-zinc-800 pb-4">
-                    <h3 className="text-xs font-black text-zinc-400 uppercase tracking-[0.3em] flex items-center gap-2">
-                       <Wrench size={16} className="text-brand-accent" />
-                       Histórico de O.S. (Últimos 30 dias)
-                    </h3>
-                    <div className="flex items-center gap-6">
-                      <div className="flex items-center gap-2">
-                        <div className="w-2 h-2 rounded-full bg-brand-accent" />
-                        <span className="text-[8px] font-black text-zinc-500 uppercase tracking-widest">Preventiva</span>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <div className="w-2 h-2 rounded-full bg-rose-500" />
-                        <span className="text-[8px] font-black text-zinc-500 uppercase tracking-widest">Corretiva</span>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="bg-zinc-900/30 rounded-[2rem] border border-zinc-900 overflow-hidden">
-                    <table className="w-full text-left">
-                      <thead>
-                        <tr className="border-b border-zinc-900 bg-zinc-950/50">
-                          <th className="p-6 text-[9px] font-black text-zinc-500 uppercase tracking-widest">Data / Status</th>
-                          <th className="p-6 text-[9px] font-black text-zinc-500 uppercase tracking-widest">Veículo / KM</th>
-                          <th className="p-6 text-[9px] font-black text-zinc-500 uppercase tracking-widest">Serviço Realizado</th>
-                          <th className="p-6 text-[9px] font-black text-zinc-500 uppercase tracking-widest text-right">Custo / O.S.</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-zinc-900">
-                        {maintenance
-                          .sort((a, b) => new Date(b.completedAt || b.createdAt).getTime() - new Date(a.completedAt || a.createdAt).getTime())
-                          .slice(0, 12)
-                          .map(log => {
-                            const vehicle = vehicles.find(v => v.id === log.vehicleId);
-                            const isPending = log.status === 'pending';
-                            return (
-                              <tr key={log.id} className="group hover:bg-zinc-900/60 transition-all">
-                                <td className="p-6">
-                                  <div className="flex flex-col gap-2">
-                                    <p className="text-xs font-black text-zinc-100 tabular-nums">
-                                      {log.completedAt ? format(parseISO(log.completedAt), 'dd/MM/yyyy') : format(parseISO(log.createdAt), 'dd/MM/yyyy')}
-                                    </p>
-                                    <span className={cn(
-                                      "text-[7px] font-black px-2 py-0.5 rounded-full uppercase tracking-widest w-fit border",
-                                      isPending ? "bg-amber-500/10 text-amber-500 border-amber-500/20" : "bg-emerald-500/10 text-emerald-500 border-emerald-500/20"
-                                    )}>
-                                      {isPending ? 'EM ABERTO' : 'CONCLUÍDA'}
-                                    </span>
-                                  </div>
-                                </td>
-                                <td className="p-6">
-                                  <div className="flex flex-col gap-2">
-                                    <div className="flex items-center gap-2">
-                                      <div className="w-2 h-2 rounded-full" style={{ backgroundColor: log.type === 'preventive' ? '#ff6b00' : '#f43f5e' }} />
-                                      <p className="text-xs font-black text-white uppercase group-hover:text-brand-accent transition-colors">{vehicle?.plate || '---'}</p>
-                                    </div>
-                                    <p className="text-[10px] text-zinc-600 font-bold tabular-nums uppercase">{log.odometer?.toLocaleString() || '---'} KM</p>
-                                  </div>
-                                </td>
-                                <td className="p-6">
-                                  <div className="max-w-[250px]">
-                                    <p className="text-xs font-black text-zinc-300 uppercase leading-tight mb-1 truncate">{log.description}</p>
-                                    <p className="text-[9px] text-zinc-600 font-medium line-clamp-1 italic">{vehicle?.model || 'Desconhecido'}</p>
-                                  </div>
-                                </td>
-                                <td className="p-6 text-right">
-                                  <div className="flex items-center justify-end gap-6">
-                                    <div className="text-right">
-                                      <p className="text-sm font-black text-white tabular-nums tracking-tighter">R$ {log.cost.toLocaleString()}</p>
-                                      <p className="text-[8px] text-zinc-600 font-black uppercase tracking-[0.2em] mt-1">Total Pago</p>
-                                    </div>
-                                    <button 
-                                      onClick={() => handlePrintOS(log)}
-                                      className="w-10 h-10 bg-zinc-800 hover:bg-white hover:text-zinc-950 text-zinc-500 rounded-xl transition-all flex items-center justify-center border border-zinc-700"
-                                    >
-                                      <Printer size={16} />
-                                    </button>
-                                  </div>
-                                </td>
-                              </tr>
-                            );
-                          })}
-                        {maintenance.length === 0 && (
-                          <tr>
-                            <td colSpan={4} className="p-20 text-center">
-                              <Wrench size={40} className="text-zinc-800 mx-auto mb-6" />
-                              <p className="text-xs font-black text-zinc-800 uppercase tracking-[0.4em]">Nenhum histórico disponível</p>
-                            </td>
-                          </tr>
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              </div>
-            </div>
-          } />
-
-              <Route path="/staff" element={
-            <div className="space-y-12 animate-in fade-in slide-in-from-bottom-4 duration-700">
-              <div className="flex items-center justify-between border-b border-white/5 pb-8">
-                <div className="flex flex-col gap-2">
-                  <h1 className="text-4xl font-black text-white uppercase tracking-tighter font-display">Fichário Operacional</h1>
-                  <div className="flex flex-wrap items-center gap-4">
-                    <p className="text-zinc-500 font-medium tracking-tight flex items-center gap-2">
-                      <Users size={14} />
-                      {employees.length} Colaboradores Registrados
-                    </p>
-                    <button 
-                      onClick={handleExportStaffToExcel}
-                      className="flex items-center gap-2 px-3 py-1.5 bg-asphalt-900 text-zinc-400 rounded-lg text-[8px] font-black uppercase tracking-widest hover:bg-asphalt-800 hover:text-white transition-all shadow-lg active:scale-95 border border-white/5"
-                    >
-                      <FileSpreadsheet size={12} />
-                      Excel
-                    </button>
-                  </div>
-                </div>
-                <div className="text-right">
-                  <p className="text-[10px] font-black text-zinc-600 uppercase tracking-[0.3em] mb-1">Hoje é dia</p>
-                  <p className="text-2xl font-black text-brand-accent tracking-tighter uppercase font-display">
-                    {format(new Date(), "dd 'de' MMMM", { locale: ptBR })}
-                  </p>
-                </div>
-              </div>
-              
-              {/* Team Dashboard Stats */}
-              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                 <div className="bg-zinc-900/50 border border-zinc-800 p-4 rounded-2xl flex flex-col gap-1">
-                    <span className="text-[8px] font-black text-zinc-500 uppercase tracking-widest">Total Equipe</span>
-                    <span className="text-2xl font-black text-white leading-none">{employees.length}</span>
-                 </div>
-                 <div className="bg-zinc-900/50 border border-zinc-800 p-4 rounded-2xl flex flex-col gap-1">
-                    <span className="text-[8px] font-black text-zinc-500 uppercase tracking-widest">Aniversariantes (Mês)</span>
-                    <span className={cn(
-                      "text-2xl font-black leading-none",
-                      employees.filter(e => e.birthDate && format(parseISO(e.birthDate), 'MM') === format(new Date(), 'MM')).length > 0 ? "text-brand-accent" : "text-zinc-500"
-                    )}>
-                      {employees.filter(e => e.birthDate && format(parseISO(e.birthDate), 'MM') === format(new Date(), 'MM')).length}
-                    </span>
-                 </div>
-                 <div className="bg-zinc-900/50 border border-zinc-800 p-4 rounded-2xl flex flex-col gap-1">
-                    <span className="text-[8px] font-black text-zinc-500 uppercase tracking-widest">CNH Expirada/Vencendo</span>
-                    <span className={cn(
-                      "text-2xl font-black leading-none",
-                      employees.filter(e => e.licenseExpiration && isBefore(parseISO(e.licenseExpiration), addDays(new Date(), 30))).length > 0 ? "text-rose-500" : "text-emerald-500"
-                    )}>
-                      {employees.filter(e => e.licenseExpiration && isBefore(parseISO(e.licenseExpiration), addDays(new Date(), 30))).length}
-                    </span>
-                 </div>
-                 <div className="bg-zinc-900/50 border border-zinc-800 p-4 rounded-2xl flex flex-col gap-1">
-                    <span className="text-[8px] font-black text-zinc-500 uppercase tracking-widest">Motoristas</span>
-                    <span className="text-2xl font-black text-white leading-none">
-                      {employees.filter(e => e.role === 'Motorista').length}
-                    </span>
-                 </div>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {/* Minimalist Add Card */}
-                <button 
-                  onClick={() => {
-                    setSelectedEmployee(null);
-                    setIsEmployeeModalOpen(true);
-                  }}
-                  className="h-full min-h-[220px] flex flex-col items-center justify-center gap-4 bg-zinc-900/30 border-2 border-dashed border-zinc-800 rounded-3xl hover:border-brand-accent/50 hover:bg-zinc-900/50 transition-all group"
-                >
-                  <div className="w-12 h-12 bg-zinc-800 rounded-full flex items-center justify-center text-zinc-500 group-hover:bg-brand-accent group-hover:text-zinc-950 transition-all">
-                    <Plus size={24} />
-                  </div>
-                  <span className="text-[10px] font-black text-zinc-500 uppercase tracking-widest group-hover:text-white transition-colors">Admitir Funcionário</span>
-                </button>
-
-                {employees.map(e => {
-                  const birthDate = e.birthDate ? parseISO(e.birthDate) : null;
-                  const isBirthday = birthDate && (format(birthDate, 'MM-dd') === format(new Date(), 'MM-dd'));
-                  const permissions = (e.permissions && e.permissions.length > 0)
-                    ? (e.permissions || []).map(p => {
-                        const tool = [
-                          { id: 'dashboard', label: 'Dashboard', icon: 'LayoutDashboard' },
-                          { id: 'journey', label: 'Jornada', icon: 'Clock' },
-                          { id: 'fretamento', label: 'Fretamento', icon: 'Route' },
-                          { id: 'fleet', label: 'Frota', icon: 'Bus' },
-                          { id: 'vencimentos', label: 'Vencimentos', icon: 'Calendar' },
-                          { id: 'finance', label: 'Financeiro', icon: 'DollarSign' },
-                          { id: 'fuel', label: 'Combustível', icon: 'Fuel' },
-                          { id: 'maintenance', label: 'Manutenção', icon: 'Wrench' },
-                          { id: 'staff', label: 'Equipe', icon: 'Users' },
-                          { id: 'trips', label: 'Viagens', icon: 'TrendingUp' },
-                          { id: 'os', label: 'OS de Viagem', icon: 'FileText' },
-                          { id: 'inventory', label: 'Almoxarifado', icon: 'Package' },
-                          { id: 'reports', label: 'Relatórios', icon: 'Bell' },
-                        ].find(t => t.id === p);
-                        return tool || { label: p, icon: 'PlusCircle' };
-                      })
-                    : (ROLE_PERMISSIONS[e.role] || []);
-
-                  return (
-                    <Card 
-                      key={e.id} 
-                      onClick={() => {
-                        setSelectedEmployee(e);
-                        setIsEmployeeModalOpen(true);
-                      }}
-                      className={cn(
-                        "relative overflow-hidden group border-zinc-800 bg-zinc-900/50 hover:bg-zinc-900 transition-all cursor-pointer p-0",
-                        isBirthday && "border-brand-accent/50 ring-1 ring-brand-accent/20"
-                      )}
-                    >
-                      {/* Fichário Header */}
-                      <div className="p-6 border-b border-zinc-800/50 flex items-start justify-between">
-                        <div className="flex items-center gap-4">
-                          <div className={cn(
-                            "w-12 h-12 bg-zinc-800 rounded-xl overflow-hidden flex items-center justify-center text-zinc-500 border border-zinc-700 transition-all",
-                            isBirthday && "bg-brand-accent text-zinc-950 border-brand-accent"
-                          )}>
-                            {e.photoUrl ? (
-                              <img src={e.photoUrl} alt={e.name} className="w-full h-full object-cover" />
-                            ) : (
-                              isBirthday ? <Cake size={24} /> : <Users size={24} />
-                            )}
-                          </div>
-                          <div>
-                            <h4 className="font-black text-white uppercase text-sm tracking-tight leading-none mb-1.5 flex items-center gap-2">
-                              {e.name}
-                              <button 
-                                onClick={(evt) => {
-                                  evt.stopPropagation();
-                                  const appUrl = window.location.origin;
-                                  const shareUrl = `${appUrl}/?emp=${e.id}`;
-                                  navigator.clipboard.writeText(shareUrl);
-                                  toast.success("Link de acesso copiado!", {
-                                    description: `O link de acesso para ${e.name} foi copiado para sua área de transferência.`
-                                  });
-                                }}
-                                className="p-1 text-zinc-500 hover:text-brand-accent transition-colors active:scale-90"
-                                title="Copiar Link de Acesso"
-                              >
-                                <Share2 size={12} />
-                              </button>
-                            </h4>
-                            <div className="flex items-center gap-2">
-                              <span className="text-[8px] font-black px-1.5 py-0.5 bg-zinc-800 text-zinc-400 rounded uppercase tracking-widest">{e.role}</span>
-                              {e.permissions && e.permissions.length > 0 && (
-                                <span className="text-[8px] font-black px-1.5 py-0.5 bg-brand-accent/10 text-brand-accent rounded uppercase tracking-widest border border-brand-accent/20">Custom</span>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-                        <button 
-                          onClick={(evt) => {
-                            evt.stopPropagation();
-                            handleDeleteEmployee(e.id, e.name);
-                          }}
-                          className="p-2 text-zinc-600 hover:text-rose-500 hover:bg-rose-500/10 rounded-lg transition-all"
-                          title="Excluir Funcionário"
-                        >
-                          <Trash2 size={16} />
-                        </button>
-                      </div>
-
-                      {/* Permissions / Tools */}
-                      <div className="px-6 py-4 bg-zinc-950/30 border-b border-zinc-800/50">
-                        <p className="text-[8px] font-black text-zinc-600 uppercase tracking-widest mb-3">Ferramentas Permitidas</p>
-                        <div className="flex flex-wrap gap-2">
-                          {permissions.map((p: any, idx: number) => (
-                            <div 
-                              key={idx}
-                              className="px-2 py-1 bg-zinc-900 border border-zinc-800 rounded flex items-center gap-1.5 group/tool"
-                              title={p.label}
-                            >
-                              <div className="text-zinc-500 group-hover/tool:text-brand-accent transition-colors">
-                                {p.icon === 'LayoutDashboard' && <LayoutDashboard size={10} />}
-                                {p.icon === 'Bus' && <Bus size={10} />}
-                                {p.icon === 'Calendar' && <Calendar size={10} />}
-                                {p.icon === 'DollarSign' && <DollarSign size={10} />}
-                                {p.icon === 'Fuel' && <Fuel size={10} />}
-                                {p.icon === 'Wrench' && <Wrench size={10} />}
-                                {p.icon === 'Users' && <Users size={10} />}
-                                {p.icon === 'TrendingUp' && <TrendingUp size={10} />}
-                                {p.icon === 'FileText' && <FileText size={10} />}
-                                {p.icon === 'Package' && <Package size={10} />}
-                                {p.icon === 'Bell' && <Bell size={10} />}
-                                {p.icon === 'Sparkles' && <Sparkles size={10} />}
-                                {p.icon === 'Clock' && <Clock size={10} />}
-                                {p.icon === 'Route' && <RouteIcon size={10} />}
-                              </div>
-                              <span className="text-[7px] font-black text-zinc-500 uppercase tracking-tighter">{p.label}</span>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-
-                      {/* Fichário Details */}
-                      <div className="p-6 space-y-4">
-                        <div className="grid grid-cols-2 gap-4">
-                          <div>
-                            <p className="text-[8px] font-black text-zinc-600 uppercase tracking-widest mb-1">Data Nascimento</p>
-                            <p className={cn(
-                              "text-xs font-bold text-zinc-400 tabular-nums",
-                              isBirthday && "text-brand-accent"
-                            )}>
-                              {e.birthDate ? format(parseISO(e.birthDate), 'dd/MM/yyyy') : '---'}
-                            </p>
-                            {isBirthday && <p className="text-[8px] font-black text-brand-accent uppercase mt-1 animate-pulse">Parabéns! 🎂</p>}
-                          </div>
-                          <div>
-                            <p className="text-[8px] font-black text-zinc-600 uppercase tracking-widest mb-1">Data Admissão</p>
-                            <p className="text-xs font-bold text-zinc-400 tabular-nums">
-                              {e.admissionDate ? format(parseISO(e.admissionDate), 'dd/MM/yyyy') : '---'}
-                            </p>
-                          </div>
-                        </div>
-
-                         <div className="pt-2">
-                           <p className="text-[8px] font-black text-zinc-600 uppercase tracking-widest mb-1">Vencimento CNH</p>
-                           <div className={cn(
-                             "px-3 py-2 rounded-lg text-[10px] font-bold border mb-2",
-                             e.licenseExpiration && isBefore(parseISO(e.licenseExpiration), new Date()) 
-                               ? "bg-rose-500/10 border-rose-500 text-rose-500" 
-                               : "bg-zinc-950/50 border-zinc-800 text-zinc-400"
-                           )}>
-                             {e.licenseExpiration ? format(parseISO(e.licenseExpiration), 'dd/MM/yyyy') : 'NÃO INFORMADO'}
-                           </div>
-                           
-                           <p className="text-[8px] font-black text-zinc-600 uppercase tracking-widest mb-2">Contato Operacional</p>
-                          <div className="flex items-center gap-2">
-                             <div className="flex-1 px-3 py-2 bg-zinc-950/50 border border-zinc-800 rounded-lg text-[10px] font-bold text-zinc-500 font-mono tracking-tighter">
-                                {e.phone || 'N/A'}
-                             </div>
-                             {e.phone && (
-                               <div className="flex flex-wrap gap-2">
-                                 <button 
-                                   onClick={(evt) => {
-                                     evt.stopPropagation();
-                                     handleShareStaffAccess(e);
-                                   }}
-                                   className="p-2 bg-emerald-500 text-zinc-950 hover:bg-white rounded-lg transition-all shadow-lg active:scale-90 flex items-center gap-2 group"
-                                   title="Enviar Link de Instalação via WhatsApp"
-                                 >
-                                   <div className="flex items-center gap-1.5">
-                                      <img src="https://upload.wikimedia.org/wikipedia/commons/6/6b/WhatsApp.svg" className="w-3.5 h-3.5" alt="WA" />
-                                      <span className="text-[9px] font-black uppercase tracking-widest">Enviar Link APK</span>
-                                   </div>
-                                 </button>
-
-                                 <button 
-                                   onClick={(evt) => {
-                                     evt.stopPropagation();
-                                     const personalizedUrl = `${window.location.origin}/?emp=${e.id}`;
-                                     generateAPKDigital(personalizedUrl, e.name);
-                                   }}
-                                   className="p-2 bg-brand-accent text-zinc-950 hover:bg-white rounded-lg transition-all shadow-lg active:scale-90 flex items-center gap-2 group"
-                                   title="Baixar Arquivo APK Digital Personalizado"
-                                 >
-                                   <Smartphone size={14} />
-                                   <span className="text-[9px] font-black uppercase tracking-widest">Baixar APK</span>
-                                 </button>
-
-                                 <button 
-                                   onClick={(evt) => {
-                                     evt.stopPropagation();
-                                     handleExportEmployeeToExcel(e);
-                                   }}
-                                   className="p-2 bg-zinc-800 text-zinc-400 hover:bg-zinc-700 hover:text-white rounded-lg transition-all shadow-lg active:scale-90 flex items-center gap-2"
-                                   title="Exportar Ficha Excel"
-                                 >
-                                   <FileSpreadsheet size={14} />
-                                   <span className="text-[9px] font-black uppercase tracking-widest">Ficha</span>
-                                 </button>
-                               </div>
-                             )}
-                          </div>
-                        </div>
-                      </div>
-                      
-                      {/* Folder Footer - APK Link */}
-                      <div className="p-4 bg-zinc-950/50 flex items-center justify-center border-t border-zinc-800/20">
-                         <button 
-                           onClick={(evt) => {
-                             evt.stopPropagation();
-                             generateAPKDigital(`${window.location.origin}/?emp=${e.id}`, e.name);
-                           }}
-                           className="w-full py-2.5 bg-brand-accent/10 hover:bg-brand-accent hover:text-zinc-950 text-brand-accent rounded-xl text-[8px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-2 border border-brand-accent/20 shadow-lg group-hover:shadow-brand-accent/10"
-                         >
-                            <Smartphone size={12} />
-                            Gerar Instalador Digital (APK)
-                         </button>
-                      </div>
-                     </Card>
-                    );
-                  })}
-                </div>
-            </div>
-          } />
+              <Route path="/maintenance" element={<Navigate to="/fleet" replace />} />
 
               <Route path="/inventory" element={
-            <div className="space-y-12">
-              <div className="flex flex-col gap-3">
-                <h1 className="text-4xl font-black text-white uppercase tracking-tighter">Almoxarifado DM</h1>
-                <p className="text-zinc-500 font-medium tracking-tight">Gestão de peças, materiais de limpeza e escritório.</p>
-              </div>
-
-              {/* Categorization Tabs */}
-              <div className="flex items-center p-1.5 bg-zinc-950 border border-zinc-800 rounded-2xl w-fit">
-                {['TUDO', 'PEÇAS', 'LIMPEZA', 'ESCRITÓRIO'].map((cat) => (
-                  <button 
-                    key={cat}
-                    onClick={() => setInventoryFilter(cat)}
-                    className={cn(
-                      "px-6 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all",
-                      (cat === 'TUDO' && inventoryFilter === '') || inventoryFilter === cat
-                        ? "bg-zinc-800 text-brand-accent shadow-lg" 
-                        : "text-zinc-500 hover:text-zinc-300"
-                    )}
-                  >
-                    {cat}
-                  </button>
-                ))}
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
-                {stock.filter(item => 
-                  inventoryFilter === '' || 
-                  inventoryFilter === 'TUDO' || 
-                  item.category.toUpperCase().includes(inventoryFilter)
-                ).length > 0 ? stock
-                  .filter(item => 
-                    inventoryFilter === '' || 
-                    inventoryFilter === 'TUDO' || 
-                    item.category.toUpperCase().includes(inventoryFilter)
-                  )
-                  .map(item => (
-                  <Card key={item.id} className="flex justify-between items-center group border-zinc-800 bg-zinc-900/50 hover:bg-zinc-900 transition-all cursor-pointer">
-                    <div className="flex items-center gap-5">
-                      <div className="w-14 h-14 bg-zinc-800 rounded-xl flex items-center justify-center shadow-lg border border-zinc-700 group-hover:rotate-6 transition-transform">
-                        <Package className="text-zinc-500 group-hover:text-brand-accent transition-colors" size={24} />
-                      </div>
-                      <div>
-                        <h4 className="font-black text-white uppercase text-sm tracking-tight">{item.name}</h4>
-                        <p className="text-[9px] text-zinc-500 font-black uppercase tracking-widest mt-1.5">{item.category}</p>
-                      </div>
-                    </div>
-                    <div className="text-right">
-                      <p className="font-black text-white tabular-nums text-2xl leading-none">{item.quantity}</p>
-                      <p className="text-[9px] text-zinc-600 font-black uppercase mt-2">{item.unit}</p>
-                      <div className={cn(
-                        "mt-4 inline-block px-3 py-1 rounded-lg text-[8px] font-black uppercase tracking-[0.2em] border",
-                        item.quantity < item.minQuantity ? "bg-rose-950/50 text-rose-500 border-rose-900/40" : "bg-emerald-950/50 text-emerald-500 border-emerald-900/40"
-                      )}>
-                        {item.quantity < item.minQuantity ? 'CRÍTICO' : 'NORMAL'}
-                      </div>
-                    </div>
-                  </Card>
-                )) : (
-                  <Card className="col-span-full py-24 text-center border-zinc-800 bg-zinc-900/20 shadow-none">
-                    <div className="w-24 h-24 bg-zinc-900 rounded-3xl flex items-center justify-center mx-auto mb-8 border border-zinc-800">
-                      <Package size={48} className="text-zinc-800" />
-                    </div>
-                    <p className="font-black text-zinc-600 uppercase text-xs tracking-[0.3em]">Nenhum item localizado no almoxarifado</p>
-                  </Card>
-                )}
-              </div>
-            </div>
-          } />
+                <InventoryManagement userRole={profile?.role} />
+              } />
 
               <Route path="/" element={<Navigate to="/dashboard" replace />} />
               <Route path="*" element={<Navigate to="/dashboard" replace />} />
@@ -2825,13 +1973,17 @@ export default function App() {
 
       <Modal 
         isOpen={isMaintenanceModalOpen} 
-        onClose={() => setIsMaintenanceModalOpen(false)}
+        onClose={() => {
+          setIsMaintenanceModalOpen(false);
+          setMaintenanceInitialData(null);
+        }}
         title="Nova Ordem de Serviço"
       >
         <MaintenanceForm 
           onSubmit={handleSaveMaintenance} 
           loading={formLoading}
           vehicles={vehicles}
+          initialData={maintenanceInitialData}
         />
       </Modal>
 
@@ -2866,57 +2018,58 @@ export default function App() {
             </div>
           </div>
 
-          <div className="grid grid-cols-1 gap-3 max-h-[60vh] overflow-y-auto pr-2 custom-scrollbar">
-            {selectedTripForAttachments?.attachments?.map((file, idx) => (
-              <div key={idx} className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4 flex items-center justify-between group">
-                <div className="flex items-center gap-4 overflow-hidden">
-                  <div className={cn(
-                    "w-12 h-12 rounded-xl flex items-center justify-center shrink-0 shadow-inner",
-                    file.type === 'pdf' ? "bg-rose-500/10 text-rose-500" : 
-                    file.type === 'word' ? "bg-blue-500/10 text-blue-500" :
-                    file.type === 'excel' ? "bg-emerald-500/10 text-emerald-500" :
-                    "bg-amber-500/10 text-amber-500"
-                  )}>
-                    {file.type === 'word' || file.type === 'pdf' ? <FileText size={24} /> : 
-                     file.type === 'excel' ? <FileText size={24} /> : 
-                     <ImageIcon size={24} />}
-                  </div>
-                  <div className="overflow-hidden">
-                    <p className="text-xs font-black text-white uppercase truncate">{file.name}</p>
-                    <p className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest mt-1">Tipo: {file.type}</p>
-                  </div>
-                </div>
-                
-                <div className="flex items-center gap-2 shrink-0">
-                  {(file.type === 'image' || file.type === 'pdf') && (
-                    <button
-                      onClick={() => handleSmartExtractFromModal(selectedTripForAttachments!, file)}
-                      disabled={isProcessingModalAttachment === file.name}
-                      className="p-3 bg-brand-accent/10 border border-brand-accent/20 text-brand-accent hover:bg-brand-accent hover:text-zinc-950 rounded-xl transition-all group/ia"
-                      title="Importar passageiros deste documento"
-                    >
-                      {isProcessingModalAttachment === file.name ? (
-                        <Loader2 size={16} className="animate-spin" />
-                      ) : (
-                        <Sparkles size={16} className="group-hover/ia:animate-pulse" />
-                      )}
-                    </button>
+          <AttachmentViewer 
+            attachments={selectedTripForAttachments?.attachments || []} 
+            renderActions={(file) => (
+              (file.type === 'image' || file.type === 'pdf') && (
+                <button
+                  onClick={() => handleSmartExtractFromModal(selectedTripForAttachments!, file)}
+                  disabled={isProcessingModalAttachment === file.name}
+                  className="p-2.5 bg-brand-accent/10 border border-brand-accent/20 text-brand-accent hover:bg-brand-accent hover:text-zinc-950 rounded-xl transition-all group/ia"
+                  title="Importar passageiros deste documento"
+                >
+                  {isProcessingModalAttachment === file.name ? (
+                    <Loader2 size={16} className="animate-spin" />
+                  ) : (
+                    <Sparkles size={16} className="group-hover/ia:animate-pulse" />
                   )}
-                  <a
-                    href={file.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="px-4 py-3 bg-zinc-800 hover:bg-white hover:text-zinc-950 text-zinc-400 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all"
-                  >
-                    Visualizar
-                  </a>
-                </div>
-              </div>
-            ))}
-          </div>
+                </button>
+              )
+            )}
+          />
 
           <button
             onClick={() => setIsAttachmentsModalOpen(false)}
+            className="w-full py-4 bg-zinc-900 border border-zinc-800 text-zinc-500 font-black text-[10px] uppercase tracking-[0.2em] rounded-2xl hover:text-white transition-all"
+          >
+            Fechar Visualização
+          </button>
+        </div>
+      </Modal>
+
+      <Modal
+        isOpen={isMaintenanceAttachmentsModalOpen}
+        onClose={() => {
+          setIsMaintenanceAttachmentsModalOpen(false);
+          setSelectedMaintenanceForAttachments(null);
+        }}
+        title="Anexos de Manutenção"
+      >
+        <div className="space-y-6">
+          <div className="flex items-center gap-3 p-4 bg-zinc-900 border border-zinc-800 rounded-2xl">
+            <div className="w-10 h-10 bg-brand-accent/10 rounded-xl flex items-center justify-center text-brand-accent">
+              <Wrench size={20} />
+            </div>
+            <div>
+              <h4 className="text-[10px] font-black text-white uppercase tracking-widest">O.S. de {selectedMaintenanceForAttachments?.description}</h4>
+              <p className="text-[8px] font-bold text-zinc-500 uppercase tracking-[0.2em]">Custo: R$ {selectedMaintenanceForAttachments?.cost.toLocaleString()}</p>
+            </div>
+          </div>
+
+          <AttachmentViewer attachments={selectedMaintenanceForAttachments?.attachments || []} />
+
+          <button
+            onClick={() => setIsMaintenanceAttachmentsModalOpen(false)}
             className="w-full py-4 bg-zinc-900 border border-zinc-800 text-zinc-500 font-black text-[10px] uppercase tracking-[0.2em] rounded-2xl hover:text-white transition-all"
           >
             Fechar Visualização
@@ -2963,6 +2116,7 @@ export default function App() {
             vehicle={vehicles.find(v => v.id === selectedTrip.vehicleId)}
             driver={employees.find(e => e.id === selectedTrip.driverId)}
             secondDriver={employees.find(e => e.id === selectedTrip.secondDriverId)}
+            onDelete={handleDeleteTrip}
           />
         )}
       </Modal>
@@ -2981,7 +2135,17 @@ export default function App() {
             maintenanceHistory={maintenance} 
             fuelHistory={recentFuelLogs} 
             employees={employees}
+            trips={trips}
             onEdit={openEditFromDetail}
+            onAddMaintenance={() => {
+              setMaintenanceInitialData({ vehicleId: selectedVehicle?.id, odometer: selectedVehicle?.currentOdometer });
+              setIsMaintenanceModalOpen(true);
+            }}
+            onEditMaintenance={(log) => {
+              setMaintenanceInitialData(log);
+              setIsMaintenanceModalOpen(true);
+            }}
+            onDeleteMaintenance={handleDeleteMaintenance}
             onPrintOS={handlePrintOS}
             onDelete={() => handleDeleteVehicle(selectedVehicle.id, selectedVehicle.plate)}
           />
@@ -3009,13 +2173,13 @@ export default function App() {
         title={deleteConfirm.title}
         message={deleteConfirm.message}
       />
-      
-      <InstallModal 
-        isOpen={showInstallModal}
-        onClose={() => setShowInstallModal(false)}
-        onInstall={handleInstallApp}
-        isInstallable={isInstallable}
-      />
     </div>
+  );
+}
+
+// App component
+export default function App() {
+  return (
+    <AppContent />
   );
 }

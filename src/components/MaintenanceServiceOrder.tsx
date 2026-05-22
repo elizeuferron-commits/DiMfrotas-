@@ -404,11 +404,39 @@ export const MaintenanceServiceOrder = ({ log, vehicle }: MaintenanceServiceOrde
                   </div>
                   <h3 className="text-sm font-black uppercase tracking-widest text-zinc-900">Descrição Detalhada do Serviço</h3>
                 </div>
-                <div className="bg-white p-8 rounded-3xl border border-zinc-100 shadow-sm min-h-[250px]">
+                <div className="bg-white p-8 rounded-3xl border border-zinc-100 shadow-sm min-h-[150px] mb-8">
                   <p className="text-sm text-zinc-600 leading-relaxed font-medium whitespace-pre-wrap" contentEditable suppressContentEditableWarning>
                     {log.description}
                   </p>
                 </div>
+
+                {log.checklist && (
+                  <div className="space-y-4">
+                    <h4 className="text-[10px] font-black text-zinc-400 uppercase tracking-widest pl-2">Checks Técnicos de Intervenção</h4>
+                    <div className="grid grid-cols-3 gap-3">
+                      {[
+                        { key: 'oilChanged', label: 'Troca de Óleo' },
+                        { key: 'filtersChanged', label: 'Troca de Filtros' },
+                        { key: 'frontPadsChanged', label: 'Pastilha Dianteira' },
+                        { key: 'rearPadsChanged', label: 'Pastilha Traseira' },
+                        { key: 'frontDiscsChanged', label: 'Disco Dianteiro' },
+                        { key: 'rearDiscsChanged', label: 'Disco Traseira' },
+                        { key: 'airConditioning', label: 'Ar Condicionado' },
+                        { key: 'tires', label: 'Pneus / Rodas' },
+                        { key: 'suspension', label: 'Suspensão' },
+                        { key: 'transmission', label: 'Transmissão' },
+                        { key: 'bathroom', label: 'Banheiro' },
+                        { key: 'minibar', label: 'Frigobar' },
+                        { key: 'tachograph', label: 'Tacógrafo' }
+                      ].filter(item => (log.checklist as any)[item.key]).map(item => (
+                        <div key={item.key} className="flex items-center gap-2 p-3 bg-white border border-zinc-100 rounded-xl">
+                          <Check size={12} className="text-emerald-500" />
+                          <span className="text-[9px] font-bold text-zinc-700 uppercase">{item.label}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
 
               <div className="grid grid-cols-2 gap-8">

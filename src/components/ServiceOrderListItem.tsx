@@ -10,18 +10,23 @@ import {
   Paperclip, 
   StickyNote,
   Clock,
-  ExternalLink
+  Trash2
 } from 'lucide-react';
 import { Trip } from '../types';
 import { cn } from '../lib/utils';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { AttachmentViewer } from './AttachmentViewer';
 
 interface ServiceOrderListItemProps {
   trip: Trip;
   onSelect: (trip: Trip) => void;
+  onDelete: (trip: Trip) => void;
 }
 
-export const ServiceOrderListItem: React.FC<ServiceOrderListItemProps> = ({ trip, onSelect }) => {
+/**
+ * Versão atualizada do item de lista de OS com o novo AttachmentViewer.
+ */
+export const ServiceOrderListItem: React.FC<ServiceOrderListItemProps> = ({ trip, onSelect, onDelete }) => {
   const [isExpanded, setIsExpanded] = useState(false);
 
   return (
@@ -93,6 +98,13 @@ export const ServiceOrderListItem: React.FC<ServiceOrderListItemProps> = ({ trip
             Gerar OS
           </button>
           <button 
+            onClick={() => onDelete(trip)}
+            className="p-4 bg-rose-500/10 border border-rose-500/20 text-rose-500 hover:bg-rose-500 hover:text-white rounded-2xl transition-all active:scale-95"
+            title="Excluir OS de Viagem"
+          >
+            <Trash2 size={20} />
+          </button>
+          <button 
             onClick={() => setIsExpanded(!isExpanded)}
             className={cn(
               "p-4 rounded-2xl border transition-all active:scale-95",
@@ -116,7 +128,7 @@ export const ServiceOrderListItem: React.FC<ServiceOrderListItemProps> = ({ trip
             transition={{ duration: 0.3, ease: 'easeInOut' }}
             className="border-t border-asphalt-800"
           >
-            <div className="p-6 bg-asphalt-950/50 space-y-6">
+            <div className="p-6 bg-asphalt-950/50 space-y-8">
               {/* Stops */}
               {trip.stops && trip.stops.length > 0 && (
                 <div className="space-y-3">
@@ -158,39 +170,9 @@ export const ServiceOrderListItem: React.FC<ServiceOrderListItemProps> = ({ trip
                 </div>
               )}
 
-              {/* Attachments */}
+              {/* Attachments with the new shadow component */}
               {trip.attachments && trip.attachments.length > 0 && (
-                <div className="space-y-3">
-                  <h4 className="text-[10px] font-black text-asphalt-500 uppercase tracking-widest flex items-center gap-2">
-                    <Paperclip size={12} /> Documentos e Anexos
-                  </h4>
-                  <div className="grid grid-cols-1 gap-2">
-                    {trip.attachments.map((file, idx) => (
-                      <a 
-                        key={idx}
-                        href={file.url}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="flex items-center justify-between p-3 bg-asphalt-900 border border-asphalt-800 hover:border-brand-accent/50 rounded-xl transition-all group/file"
-                      >
-                        <div className="flex items-center gap-3">
-                          <div className="w-8 h-8 bg-asphalt-800 rounded-lg flex items-center justify-center text-asphalt-500 group-hover/file:text-brand-accent">
-                            <FileText size={14} />
-                          </div>
-                          <div>
-                            <p className="text-[10px] font-bold text-white uppercase tracking-tight truncate max-w-[150px]">
-                              {file.name}
-                            </p>
-                            <p className="text-[8px] font-black text-asphalt-700 uppercase">
-                              {file.type}
-                            </p>
-                          </div>
-                        </div>
-                        <ExternalLink size={14} className="text-asphalt-700 group-hover/file:text-brand-accent transition-colors" />
-                      </a>
-                    ))}
-                  </div>
-                </div>
+                <AttachmentViewer attachments={trip.attachments} />
               )}
 
               {(!trip.stops || trip.stops.length === 0) && !trip.notes && (!trip.attachments || trip.attachments.length === 0) && (

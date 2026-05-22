@@ -11,35 +11,22 @@ import {
   ShieldCheck,
   Navigation,
   Check,
-  Share2,
   FileDown,
-  Type,
   FileCode,
   Loader2,
-  Info
+  Info,
+  Trash2,
+  CornerDownRight,
+  UserCheck2,
+  FileCheck2
 } from 'lucide-react';
 import { Trip, Vehicle, Employee } from '../types';
-import { format, parseISO } from 'date-fns';
+import { format } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { Button } from './UI';
 import { toast } from 'sonner';
-import html2canvas from 'html2canvas';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import { 
-  Document, 
-  Packer, 
-  Paragraph, 
-  TextRun, 
-  Table, 
-  TableRow, 
-  TableCell, 
-  WidthType, 
-  AlignmentType,
-  HeadingLevel,
-  BorderStyle,
-} from 'docx';
-import { saveAs } from 'file-saver';
 import { cn } from '../lib/utils';
 
 interface TripServiceOrderProps {
@@ -47,9 +34,10 @@ interface TripServiceOrderProps {
   vehicle?: Vehicle;
   driver?: Employee;
   secondDriver?: Employee;
+  onDelete?: (trip: Trip) => void;
 }
 
-export const TripServiceOrder = ({ trip, vehicle, driver, secondDriver }: TripServiceOrderProps) => {
+export const TripServiceOrder = ({ trip, vehicle, driver, secondDriver, onDelete }: TripServiceOrderProps) => {
   const [checkedPassengers, setCheckedPassengers] = useState<Record<number, boolean>>({});
   const [isGenerating, setIsGenerating] = useState(false);
   const orderRef = useRef<HTMLDivElement>(null);
@@ -65,780 +53,545 @@ export const TripServiceOrder = ({ trip, vehicle, driver, secondDriver }: TripSe
     window.print();
   };
 
-  // Improved PDF Generation using jsPDF + html2canvas for visual fidelity
+  // High Fidelity Vector PDF Generator for DM Turismo Service Orders
   const handleDownloadPDF = async () => {
-    if (!orderRef.current) return;
     setIsGenerating(true);
     try {
+      const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
       const osNum = trip.osNumber || trip.id.slice(-6).toUpperCase();
-      const canvas = await html2canvas(orderRef.current, {
-        scale: 2,
-        useCORS: true,
-        backgroundColor: '#ffffff'
+      
+      // 1. Corporate Branding Header Banner (Dark Zinc background)
+      doc.setFillColor(24, 24, 27); // zinc-900 (#18181b)
+      doc.rect(0, 0, 210, 42, 'F');
+      
+      // Orange Accent Bar under header
+      doc.setFillColor(255, 107, 0); // brand-accent (#ff6b00)
+      doc.rect(0, 40, 210, 2, 'F');
+      
+      // Typographic Logo in the header
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(24);
+      doc.setTextColor(255, 107, 0); // Orange brand-accent
+      doc.text('DM TURISMO', 14, 18);
+      
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8);
+      doc.setTextColor(161, 161, 170); // zinc-400
+      doc.text('TRANSPORTE E FRETAMENTO DE ALTO PADRÃO', 14, 24);
+      doc.text('Garagem Operacional e Logística de Viagens', 14, 28);
+      doc.text('SAC / Plantão: contato@dmturismo.com.br', 14, 32);
+      
+      // Right side: Document Meta
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(14);
+      doc.setTextColor(255, 255, 255);
+      doc.text('ORDEM DE SERVIÇO', 196, 16, { align: 'right' });
+      
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(9);
+      doc.setTextColor(255, 107, 0);
+      doc.text(`NÚMERO DA O.S.: ${osNum}`, 196, 21, { align: 'right' });
+      
+      doc.setFontSize(8);
+      doc.setTextColor(161, 161, 170);
+      doc.text(`DATA EMISSÃO: ${format(new Date(), 'dd/MM/yyyy HH:mm', { locale: ptBR })}`, 196, 26, { align: 'right' });
+      doc.text(`TIPO: ${trip.tripType === 'mercosur' ? 'VIAGEM MERCOSUL' : trip.tripType === 'interstate' ? 'INTERESTADUAL' : 'ESTADUAL'}`, 196, 30, { align: 'right' });
+      doc.text(`STATUS: ${trip.status === 'active' ? 'EM EM ANDAMENTO' : 'PROGRAMADA'}`, 196, 34, { align: 'right' });
+      
+      // Reset Default Text Styles
+      doc.setTextColor(24, 24, 27); // Dark gray
+      
+      // SECTION 1: INFORMAÇÕES DO ITINERÁRIO
+      doc.setFontSize(10);
+      doc.setFont('helvetica', 'bold');
+      doc.text('1. DADOS DE CADASTRO DA VIAGEM / ITINERÁRIO', 14, 52);
+      
+      const itinerarioDetails = [
+        ['Título da Viagem / Serviço:', trip.title.toUpperCase(), 'Status Oficial:', trip.status === 'active' ? 'EM CURSO / OPERANTE' : 'ESCALADO / AGENDADO'],
+        ['Local de Embarque (Origem):', trip.origin.toUpperCase(), 'Local de Desembarque (Destino):', trip.destination.toUpperCase()],
+        ['Data & Horário de Partida:', format(new Date(trip.startDate), "dd 'de' MMMM 'de' yyyy 'às' HH:mm", { locale: ptBR }), 'Previsão de Retorno:', '-- / Conclusão Padrão']
+      ];
+      
+      autoTable(doc, {
+        startY: 55,
+        body: itinerarioDetails,
+        theme: 'plain',
+        bodyStyles: { fontSize: 8, textColor: [39, 39, 42], fontStyle: 'normal' },
+        columnStyles: {
+          0: { fontStyle: 'bold', cellWidth: 35, textColor: [113, 113, 122] },
+          1: { cellWidth: 65 },
+          2: { fontStyle: 'bold', cellWidth: 40, textColor: [113, 113, 122] },
+          3: { cellWidth: 55 }
+        },
+        margin: { left: 14, right: 14 }
       });
       
-      const imgData = canvas.toDataURL('image/png');
-      const pdf = new jsPDF({
-        orientation: 'portrait',
-        unit: 'mm',
-        format: 'a4'
+      let currentY = (doc as any).lastAutoTable.finalY + 8;
+      
+      // SECTION 2: DADOS DA ESCALA OPERACIONAL (VEÍCULO E MOTORISTAS)
+      doc.setFontSize(10);
+      doc.setFont('helvetica', 'bold');
+      doc.text('2. ESCALA OPERACIONAL (FROTA & TRIPULAÇÃO)', 14, currentY);
+      
+      const frotaDetails = [
+        ['Veículo Escalado:', vehicle ? `${vehicle.model.toUpperCase()} (PLACA: ${vehicle.plate.toUpperCase()})` : 'AGUARDANDO ESCALA', 'Capacidade Frota:', vehicle ? `${vehicle.capacity} LUGARES` : '-- PAS'],
+        ['Categoria / Ano:', vehicle ? `${vehicle.type.toUpperCase()} • DE ${vehicle.factoryYear}` : 'CLASSIFICAÇÃO TURISMO', 'Controle Antt:', vehicle?.anttExpiration ? `EXPIRA EM ${format(new Date(vehicle.anttExpiration), 'dd/MM/yyyy')}` : 'REGULARIZADO'],
+        ['Motorista Principal:', driver ? `${driver.name.toUpperCase()} (CPF: ${driver.cpf || '---'})` : 'NÃO ESCALADO', 'Contato Celular:', driver?.phone || '---'],
+        ['Segundo Motorista (Revezamento):', secondDriver ? `${secondDriver.name.toUpperCase()} (CPF: ${secondDriver.cpf || '---'})` : 'NÃO EXIGIDO NESTA ROTA', 'Contato Celular:', secondDriver?.phone || '---']
+      ];
+      
+      autoTable(doc, {
+        startY: currentY + 3,
+        body: frotaDetails,
+        theme: 'plain',
+        bodyStyles: { fontSize: 8, textColor: [39, 39, 42] },
+        columnStyles: {
+          0: { fontStyle: 'bold', cellWidth: 48, textColor: [113, 113, 122] },
+          1: { cellWidth: 52 },
+          2: { fontStyle: 'bold', cellWidth: 35, textColor: [113, 113, 122] },
+          3: { cellWidth: 60 }
+        },
+        margin: { left: 14, right: 14 }
       });
       
-      const pdfWidth = pdf.internal.pageSize.getWidth();
-      const imgProps = pdf.getImageProperties(imgData);
-      const pdfHeight = (imgProps.height * pdfWidth) / imgProps.width;
+      currentY = (doc as any).lastAutoTable.finalY + 8;
       
-      pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
-      pdf.save(`OS_LAYOUT_${osNum}.pdf`);
-      toast.success('PDF (Layout) gerado com sucesso!');
-    } catch (error) {
-      console.error(error);
-      toast.error('Erro ao gerar PDF (Layout)');
-    } finally {
-      setIsGenerating(false);
-    }
-  };
-
-  // Selectable Text PDF using jspdf + autotable
-  const handleDownloadTextPDF = () => {
-    setIsGenerating(true);
-    try {
-      const pdf = new jsPDF();
-      const osNum = trip.osNumber || trip.id.slice(-6).toUpperCase();
-      const margin = 15;
-      const pageWidth = pdf.internal.pageSize.getWidth();
-      let currentY = 20;
-
-      // Header (Only on first page)
-      pdf.setFont("helvetica", "bold");
-      pdf.setFontSize(22);
-      pdf.setTextColor(30, 30, 30);
-      pdf.text("DM TURISMO", margin, currentY);
-      
-      pdf.setFontSize(10);
-      pdf.setFont("helvetica", "normal");
-      pdf.setTextColor(100, 100, 100);
-      pdf.text("LOGÍSTICA & TRANSPORTE DE ALTO DESEMPENHO", margin, currentY + 7);
-      
-      pdf.setFontSize(14);
-      pdf.setFont("helvetica", "bold");
-      pdf.setTextColor(0, 0, 0);
-      pdf.text(`OS: ${osNum}`, pageWidth - margin - 40, currentY + 5);
-      
-      currentY += 20;
-      pdf.setDrawColor(240, 240, 240);
-      pdf.line(margin, currentY, pageWidth - margin, currentY);
-      currentY += 10;
-
-      // Trip Title
-      pdf.setFontSize(16);
-      pdf.text(trip.title.toUpperCase(), margin, currentY);
-      currentY += 10;
-
-      // Basic Info Table
-      autoTable(pdf, {
-        startY: currentY,
-        margin: { left: margin },
-        head: [['INFORMAÇÕES DA VIAGEM', 'DETALHES']],
-        body: [
-          ['Origem', trip.origin],
-          ['Destino', trip.destination],
-          ['Data de Início', format(parseISO(trip.startDate), "dd/MM/yyyy HH:mm")],
-          ['Previsão Retorno', trip.endDate ? format(parseISO(trip.endDate), "dd/MM/yyyy HH:mm") : '---'],
-          ['Tipo de Viagem', trip.tripType.toUpperCase()],
-          ['Status', trip.status.toUpperCase()],
-        ],
-        theme: 'striped',
-        headStyles: { fillColor: [40, 40, 40] },
-      });
-
-      currentY = (pdf as any).lastAutoTable.finalY + 10;
-
-      // Vehicle & Driver Info
-      autoTable(pdf, {
-        startY: currentY,
-        margin: { left: margin },
-        head: [['RECURSOS', 'DETALHES']],
-        body: [
-          ['Veículo (Placa)', vehicle?.plate || '---'],
-          ['Modelo', vehicle?.model || '---'],
-          ['Motorista Titular', driver?.name || '---'],
-          ['Motorista Auxiliar', secondDriver?.name || '---'],
-        ],
-        theme: 'striped',
-        headStyles: { fillColor: [60, 60, 60] },
-      });
-
-      currentY = (pdf as any).lastAutoTable.finalY + 10;
-
-      // Passengers Table
-      if (trip.passengers.length > 0) {
-        pdf.setFontSize(12);
-        pdf.text("MANIFESTO DE PASSAGEIROS", margin, currentY);
-        currentY += 5;
-
-        autoTable(pdf, {
-          startY: currentY,
-          margin: { left: margin },
-          head: [['Nº', 'NOME COMPLETO', 'DOCUMENTO']],
-          body: trip.passengers.map((p, i) => [i + 1, p.name.toUpperCase(), p.document]),
+      // SECTION 3: ITINERÁRIO / CRONOGRAMA DE PARADAS (if present)
+      if (trip.stops && trip.stops.length > 0) {
+        doc.setFontSize(10);
+        doc.setFont('helvetica', 'bold');
+        doc.text('3. CRONOGRAMA DE PARADAS E PONTOS DE APOIO', 14, currentY);
+        
+        const stopRows = trip.stops.map((stop, index) => [
+          String(index + 1).padStart(2, '0'),
+          stop.location.toUpperCase(),
+          stop.arrivalTime || '--:--',
+          'PREVISTA'
+        ]);
+        
+        autoTable(doc, {
+          startY: currentY + 3,
+          head: [['ORDEM', 'PONTO / LOCALIZAÇÃO', 'PREVISÃO DE CHEGADA', 'TIPO']],
+          body: stopRows,
           theme: 'grid',
-          headStyles: { fillColor: [20, 20, 20] },
+          headStyles: { fillColor: [24, 24, 27], textColor: [255, 255, 255], fontStyle: 'bold', halign: 'center', fontSize: 7.5 },
+          bodyStyles: { fontSize: 7.5, halign: 'center' },
+          columnStyles: {
+            0: { cellWidth: 20, fontStyle: 'bold' },
+            1: { halign: 'left' },
+            2: { cellWidth: 40 },
+            3: { cellWidth: 25 }
+          },
+          alternateRowStyles: { fillColor: [250, 250, 250] },
+          margin: { left: 14, right: 14 }
         });
-        currentY = (pdf as any).lastAutoTable.finalY + 10;
-      }
-
-      // Notes
-      if (trip.notes) {
-        if (currentY > 250) {
-          pdf.addPage();
-          currentY = 20;
-        }
-        pdf.setFontSize(12);
-        pdf.text("OBSERVAÇÕES", margin, currentY);
-        currentY += 7;
-        pdf.setFont("helvetica", "normal");
-        pdf.setFontSize(10);
-        const splitNotes = pdf.splitTextToSize(trip.notes, pageWidth - (2 * margin));
-        pdf.text(splitNotes, margin, currentY);
-        currentY += (splitNotes.length * 5) + 10;
-      }
-
-      // Documentation
-      if (trip.documentation.length > 0) {
-        if (currentY > 250) {
-          pdf.addPage();
-          currentY = 20;
-        }
-        pdf.setFontSize(12);
-        pdf.setFont("helvetica", "bold");
-        pdf.text("CHECKLIST DE DOCUMENTAÇÃO", margin, currentY);
-        currentY += 7;
         
-        trip.documentation.forEach(doc => {
-            pdf.setFont("helvetica", doc.checked ? "bold" : "normal");
-            pdf.text(`[${doc.checked ? 'X' : ' '}] ${doc.label}`, margin + 5, currentY);
-            currentY += 6;
-        });
+        currentY = (doc as any).lastAutoTable.finalY + 8;
       }
-
-      pdf.save(`OS_TEXTO_${osNum}.pdf`);
-      toast.success('PDF (Texto) gerado com sucesso!');
-    } catch (error) {
-      console.error(error);
-      toast.error('Erro ao gerar PDF (Texto)');
+      
+      // SECTION 4: MANIFESTO OFICIAL DE PASSAGEIROS
+      doc.setFontSize(10);
+      doc.setFont('helvetica', 'bold');
+      doc.text(`4. MANIFESTO OFICIAL DE PASSAGEIROS EMBARCADOS (${trip.passengers?.length || 0} TOTAL)`, 14, currentY);
+      
+      if (trip.passengers && trip.passengers.length > 0) {
+        const passengerRows = trip.passengers.map((p, idx) => [
+          String(idx + 1).padStart(2, '0'),
+          p.name.toUpperCase(),
+          p.document || '---',
+          checkedPassengers[idx] ? '[ X ] EMBARCADO' : '[   ] NÃO REPORTADO'
+        ]);
+        
+        autoTable(doc, {
+          startY: currentY + 3,
+          head: [['SEQ', 'DADO COMPLETO DO PASSAGEIRO', 'DOCUMENTO DE IDENTIDADE (RG / CPF)', 'STATUS CONTROLE']],
+          body: passengerRows,
+          theme: 'grid',
+          headStyles: { fillColor: [255, 107, 0], textColor: [24, 24, 27], fontStyle: 'bold', halign: 'center', fontSize: 7.5 },
+          bodyStyles: { fontSize: 7.5, halign: 'left' },
+          columnStyles: {
+            0: { cellWidth: 12, halign: 'center', fontStyle: 'bold' },
+            1: { halign: 'left' },
+            2: { cellWidth: 55, halign: 'center' },
+            3: { cellWidth: 35, halign: 'center', fontStyle: 'bold' }
+          },
+          alternateRowStyles: { fillColor: [250, 250, 250] },
+          margin: { left: 14, right: 14 }
+        });
+        
+        currentY = (doc as any).lastAutoTable.finalY + 10;
+      } else {
+        doc.setFontSize(8.5);
+        doc.setFont('helvetica', 'italic');
+        doc.setTextColor(113, 113, 122);
+        doc.text('Manifesto de passageiros em branco.', 14, currentY + 4);
+        currentY += 12;
+      }
+      
+      // SECTION 5: OBSERVAÇÕES E NOTAS DE LOGÍSTICA
+      if (trip.notes) {
+        if (currentY > 240) {
+          doc.addPage();
+          currentY = 20;
+        }
+        
+        doc.setFontSize(10);
+        doc.setFont('helvetica', 'bold');
+        doc.setTextColor(24, 24, 27);
+        doc.text('5. OBSERVAÇÕES ESPECIAIS', 14, currentY);
+        
+        doc.setFontSize(7.5);
+        doc.setFont('helvetica', 'normal');
+        doc.setTextColor(63, 63, 70);
+        
+        const splitNotes = doc.splitTextToSize(trip.notes.toUpperCase(), 182);
+        doc.text(splitNotes, 14, currentY + 4);
+        currentY += (splitNotes.length * 4) + 12;
+      }
+      
+      // SIGNATURE LINES (Ensure it fits at footer level or on page addition)
+      if (currentY > 230) {
+        doc.addPage();
+        currentY = 40;
+      } else {
+        currentY = Math.max(currentY, 230);
+      }
+      
+      doc.setDrawColor(212, 212, 216); // zinc-300
+      doc.line(14, currentY, 90, currentY);
+      doc.setFontSize(7);
+      doc.setFont('helvetica', 'normal');
+      doc.setTextColor(113, 113, 122);
+      doc.text('DECLARAÇÃO DE RECEBIMENTO DA GUIA E ESCALA', 14, currentY + 4);
+      doc.text(driver ? driver.name.toUpperCase() : 'NOME DO MOTORISTA ESCALADO', 14, currentY + 8);
+      
+      doc.line(120, currentY, 196, currentY);
+      doc.text('GERENTE DE LOGÍSTICA / DIRETORIA OPERACIONAL', 120, currentY + 4);
+      doc.text('AUTORIZADO POR: DEPARTAMENTO DE CONTROLE DM', 120, currentY + 8);
+      
+      doc.save(`OS_DM_TURISMO_${osNum}.pdf`);
+      toast.success('Guva de Ordem de Serviço exportada em PDF!');
+    } catch (e) {
+      console.error(e);
+      toast.error('Ocorreu um erro ao construir o PDF.');
     } finally {
       setIsGenerating(false);
     }
   };
 
-  const handleDownloadWord = async () => {
-    setIsGenerating(true);
-    try {
-        const osNum = trip.osNumber || trip.id.slice(-6).toUpperCase();
-        
-        const doc = new Document({
-            sections: [{
-                properties: {},
-                children: [
-                    new Paragraph({
-                        children: [
-                            new TextRun({
-                                text: "DM TURISMO",
-                                bold: true,
-                                size: 48,
-                                color: "1E1E1E",
-                            }),
-                        ],
-                        spacing: { after: 200 },
-                    }),
-                    new Paragraph({
-                        children: [
-                            new TextRun({
-                                text: "LOGÍSTICA & TRANSPORTE DE ALTO DESEMPENHO",
-                                size: 20,
-                                color: "646464",
-                            }),
-                        ],
-                        spacing: { after: 400 },
-                    }),
-                    new Paragraph({
-                        text: `ORDEM DE SERVIÇO: ${osNum}`,
-                        heading: HeadingLevel.HEADING_2,
-                        spacing: { after: 300 },
-                    }),
-                    new Paragraph({
-                        text: trip.title.toUpperCase(),
-                        heading: HeadingLevel.HEADING_3,
-                        spacing: { after: 300 },
-                    }),
-                    
-                    // Information Table
-                    new Table({
-                        width: { size: 100, type: WidthType.PERCENTAGE },
-                        rows: [
-                            new TableRow({
-                                children: [
-                                    new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "ITEM", bold: true })] })] }),
-                                    new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "DESCRIÇÃO", bold: true })] })] }),
-                                ]
-                            }),
-                            new TableRow({
-                                children: [
-                                    new TableCell({ children: [new Paragraph("ORIGEM")] }),
-                                    new TableCell({ children: [new Paragraph(trip.origin)] }),
-                                ]
-                            }),
-                            new TableRow({
-                                children: [
-                                    new TableCell({ children: [new Paragraph("DESTINO")] }),
-                                    new TableCell({ children: [new Paragraph(trip.destination)] }),
-                                ]
-                            }),
-                            new TableRow({
-                                children: [
-                                    new TableCell({ children: [new Paragraph("INÍCIO")] }),
-                                    new TableCell({ children: [new Paragraph(format(parseISO(trip.startDate), "dd/MM/yyyy HH:mm"))] }),
-                                ]
-                            }),
-                            new TableRow({
-                                children: [
-                                    new TableCell({ children: [new Paragraph("VEÍCULO")] }),
-                                    new TableCell({ children: [new Paragraph(`${vehicle?.plate || ''} - ${vehicle?.model || ''}`)] }),
-                                ]
-                            }),
-                            new TableRow({
-                                children: [
-                                    new TableCell({ children: [new Paragraph("MOTORISTA")] }),
-                                    new TableCell({ children: [new Paragraph(driver?.name || "NÃO ATRIBUÍDO")] }),
-                                ]
-                            }),
-                        ]
-                    }),
-
-                    new Paragraph({ text: "", spacing: { before: 400 } }),
-                    new Paragraph({ 
-                        text: "MANIFESTO DE PASSAGEIROS", 
-                        heading: HeadingLevel.HEADING_3,
-                        spacing: { after: 200 }
-                    }),
-
-                    new Table({
-                        width: { size: 100, type: WidthType.PERCENTAGE },
-                        rows: [
-                            new TableRow({
-                                children: [
-                                    new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Nº", bold: true })] })] }),
-                                    new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "NOME COMPLETO", bold: true })] })] }),
-                                    new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "DOCUMENTO", bold: true })] })] }),
-                                ]
-                            }),
-                            ...trip.passengers.map((p, i) => new TableRow({
-                                children: [
-                                    new TableCell({ children: [new Paragraph(String(i + 1))] }),
-                                    new TableCell({ children: [new Paragraph(p.name.toUpperCase())] }),
-                                    new TableCell({ children: [new Paragraph(p.document)] }),
-                                ]
-                            }))
-                        ]
-                    }),
-
-                    new Paragraph({ text: "", spacing: { before: 400 } }),
-                    new Paragraph({ 
-                        text: "OBSERVAÇÕES", 
-                        heading: HeadingLevel.HEADING_3,
-                        spacing: { after: 200 }
-                    }),
-                    new Paragraph({ text: trip.notes || "Sem observações adicionais.", spacing: { after: 400 } }),
-
-                    new Paragraph({ text: "", spacing: { before: 800 } }),
-                    new Paragraph({
-                        alignment: AlignmentType.CENTER,
-                        children: [
-                            new TextRun({
-                                text: "_______________________________________",
-                                color: "000000",
-                            }),
-                            new TextRun({
-                                text: "\nASSINATURA DO RESPONSÁVEL",
-                                size: 16,
-                                bold: true,
-                                break: 1,
-                            })
-                        ]
-                    })
-                ]
-            }]
-        });
-
-        const blob = await Packer.toBlob(doc);
-        saveAs(blob, `OS_${osNum}.docx`);
-        toast.success('Arquivo Word gerado com sucesso!');
-    } catch (error) {
-        console.error(error);
-        toast.error('Erro ao gerar arquivo Word');
-    } finally {
-        setIsGenerating(false);
-    }
-  };
+  const allChecked = trip.passengers && trip.passengers.length > 0 && 
+    trip.passengers.every((_, idx) => checkedPassengers[idx]);
 
   return (
     <div className="space-y-6">
-      {/* Action Bar */}
-      <div className="flex flex-wrap items-center justify-end gap-3 no-print p-4 bg-zinc-900 border border-zinc-800 rounded-3xl shadow-2xl">
-        <div className="flex-1 flex items-center gap-4 px-4 border-r border-zinc-800">
-          <div className="w-10 h-10 rounded-2xl bg-brand-accent/10 flex items-center justify-center text-brand-accent">
-            <Info size={20} />
+      {/* Dynamic Actions Ribbon */}
+      <div className="flex flex-col sm:flex-row flex-wrap items-center justify-between gap-4 no-print p-4 bg-zinc-900 border border-zinc-800 rounded-2xl shadow-xl">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-orange-500/10 flex items-center justify-center text-brand-accent">
+            <Info size={18} />
           </div>
           <div>
-            <p className="text-[10px] font-black text-zinc-500 uppercase tracking-widest leading-none mb-1">Visualização de OS</p>
-            <p className="text-sm font-black text-white uppercase tracking-tight">Otimizado para Impressão A4</p>
+            <p className="text-[10px] font-black text-zinc-500 uppercase tracking-widest leading-none mb-1">VISUALIZAÇÃO DA GUIA DE TRANSPORTE</p>
+            <p className="text-xs font-black text-white uppercase tracking-tight">Papel Padrão A4 • Impressão Física e PDF Configurados</p>
           </div>
         </div>
 
-        <Button 
-          variant="secondary"
-          onClick={handleDownloadTextPDF} 
-          disabled={isGenerating}
-          className="gap-2 bg-asphalt-800 text-zinc-400 hover:text-white border-asphalt-700 h-12 px-6 rounded-2xl"
-        >
-          {isGenerating ? <Loader2 size={18} className="animate-spin" /> : <Type size={18} />}
-          PDF (TEXTO)
-        </Button>
+        <div className="flex items-center gap-2.5 w-full sm:w-auto justify-end">
+          {onDelete && (
+            <Button 
+              onClick={() => onDelete(trip)} 
+              className="h-10 px-4 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-500 hover:bg-rose-500 hover:text-white transition-all text-[10px] font-black uppercase tracking-wider"
+            >
+              <Trash2 size={14} className="mr-1.5" />
+              EXCLUIR
+            </Button>
+          )}
 
-        <Button 
-          variant="secondary"
-          onClick={handleDownloadWord} 
-          disabled={isGenerating}
-          className="gap-2 bg-blue-500/10 text-blue-400 hover:bg-blue-500 hover:text-white border-blue-500/20 h-12 px-6 rounded-2xl"
-        >
-          {isGenerating ? <Loader2 size={18} className="animate-spin" /> : <FileCode size={18} />}
-          WORD
-        </Button>
+          <Button 
+            disabled={isGenerating}
+            onClick={handleDownloadPDF} 
+            className="h-10 px-4 rounded-xl bg-zinc-800 border border-zinc-700 hover:bg-zinc-700 text-brand-accent hover:text-white transition-all text-[10px] font-black uppercase tracking-wider disabled:opacity-50"
+          >
+            {isGenerating ? (
+              <>
+                <Loader2 size={14} className="mr-1.5 animate-spin" />
+                CONSTRUINDO...
+              </>
+            ) : (
+              <>
+                <FileCheck2 size={14} className="mr-1.5 text-brand-accent" />
+                BAIXAR PDF
+              </>
+            )}
+          </Button>
 
-        <Button 
-          variant="secondary"
-          onClick={handleDownloadPDF} 
-          disabled={isGenerating}
-          className="gap-2 bg-zinc-100 text-zinc-950 hover:bg-zinc-200 border-zinc-200 h-12 px-6 rounded-2xl"
-        >
-          {isGenerating ? <Loader2 size={18} className="animate-spin" /> : <FileDown size={18} />}
-          PDF (LAYOUT)
-        </Button>
-
-        <Button onClick={handlePrint} disabled={isGenerating} className="gap-2 h-12 px-6 rounded-2xl bg-brand-accent text-zinc-950 hover:bg-white border-brand-accent transition-all font-black">
-          <Printer size={18} />
-          IMPRIMIR
-        </Button>
+          <Button 
+            onClick={handlePrint} 
+            className="h-10 px-5 rounded-xl bg-brand-accent text-zinc-950 hover:bg-white border-brand-accent transition-all text-[10px] font-black uppercase tracking-wider"
+          >
+            <Printer size={14} className="mr-1.5" />
+            IMPRIMIR
+          </Button>
+        </div>
       </div>
 
-      {/* Document Container */}
-      <div 
-        ref={orderRef}
-        id="service-order" 
-        className="bg-white text-zinc-900 mx-auto rounded-none border shadow-2xl font-sans w-full max-w-[210mm] min-h-[297mm] print:p-0 print:m-0 print:shadow-none print:border-0 relative overflow-hidden"
-      >
-        {/* Ribbon - Modern Badge */}
-        <div className="absolute top-0 right-0 left-0 h-2 bg-zinc-900" />
-        
-        {/* Padding for content */}
-        <div className="p-12">
-          {/* Header Section */}
-          <div className="grid grid-cols-2 gap-10 border-b-2 border-zinc-100 pb-12 mb-12">
-            <div className="space-y-4">
-              <div className="flex items-center gap-3">
-                <div className="w-12 h-12 rounded-2xl bg-zinc-900 flex items-center justify-center text-brand-accent shadow-xl">
-                  <Bus size={32} strokeWidth={2.5} />
-                </div>
-                <div>
-                   <h1 className="text-3xl font-black uppercase tracking-tighter leading-tight text-zinc-900">DM TURISMO</h1>
-                   <div className="flex items-center gap-2">
-                     <div className="h-[2px] w-4 bg-brand-accent" />
-                     <p className="text-[9px] font-black uppercase tracking-[0.3em] text-zinc-400">Logística de Alto Desempenho</p>
+      {/* Simulated A4 Print Preview Sheet Container */}
+      <div className="w-full overflow-x-auto py-4 bg-zinc-950/40 rounded-3xl border border-zinc-800 flex justify-center shadow-inner select-none lg:p-8">
+        <div 
+          ref={orderRef} 
+          className="print-preview-a4 bg-white text-zinc-900 rounded-none border border-zinc-300 shadow-[0_15px_60px_rgba(0,0,0,0.6)] font-sans w-[210mm] min-h-[297mm] p-12 pr-14 relative flex flex-col justify-between overflow-hidden"
+          style={{ boxSizing: 'border-box' }}
+        >
+          {/* Top Thin Contrast Accent Layer */}
+          <div className="absolute top-0 right-0 left-0 h-2 bg-zinc-900" />
+          
+          <div>
+            {/* Sheet Typography Header Block */}
+            <div className="grid grid-cols-2 gap-4 border-b-2 border-zinc-900/60 pb-8 mb-8 items-start">
+               <div>
+                 <div className="flex items-center gap-2.5 mb-2">
+                   <div className="w-10 h-10 rounded-xl bg-zinc-900 flex items-center justify-center text-brand-accent shadow-md">
+                     <Bus size={22} className="text-orange-500" strokeWidth={2.5} />
                    </div>
-                </div>
-              </div>
-              
-              <div className="space-y-1">
-                <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Endereço Operacional</p>
-                <p className="text-xs font-bold text-zinc-700 uppercase">Av. Logística Industrial, 5000 • CD 01</p>
-                <p className="text-xs font-bold text-zinc-700 uppercase">WhatsApp: (XX) XXXXX-XXXX</p>
-              </div>
+                   <div>
+                     <h1 className="text-xl font-extrabold uppercase tracking-tighter text-zinc-950 leading-none">DM TURISMO</h1>
+                     <p className="text-[7px] text-zinc-500 font-extrabold tracking-widest uppercase">LOGÍSTICA INTEGRADA</p>
+                   </div>
+                 </div>
+                 <p className="text-[7.5px] font-bold text-zinc-400 uppercase tracking-tight">PROP: GESTÃO DE FRETAMENTO E ROTAS DE VIAGEM</p>
+                 <p className="text-[7.5px] font-black text-zinc-800 uppercase tracking-tight leading-normal">GARAGEM OPERACIONAL DM • BRASIL / MERCOSUL</p>
+               </div>
+               
+               <div className="text-right flex flex-col justify-between h-full">
+                 <p className="text-[9px] font-black text-brand-accent uppercase tracking-widest mb-1">GUIA DE ORDEM DE SERVIÇO</p>
+                 <p className="text-2xl font-black text-zinc-950 tracking-tighter leading-none mb-1">
+                   {trip.osNumber || `#${trip.id.slice(-6).toUpperCase()}`}
+                 </p>
+                 <span className="text-[7.5px] text-zinc-400 font-black uppercase">
+                   EMISSÃO: {format(new Date(), 'dd/MM/yyyy HH:mm', { locale: ptBR })}
+                 </span>
+               </div>
             </div>
 
-            <div className="flex flex-col items-end justify-start">
-              <div className="bg-zinc-50 border-2 border-zinc-100 p-6 rounded-3xl min-w-[200px] text-right shadow-sm group">
-                <div className="flex items-center justify-end gap-2 mb-2">
-                  <div className="w-2 h-2 rounded-full bg-brand-accent animate-pulse" />
-                  <p className="text-[10px] font-black uppercase tracking-widest text-zinc-400">Status do Documento</p>
-                </div>
-                <p className="text-[9px] font-black uppercase tracking-[0.4em] leading-none mb-2 text-zinc-400">Ordem de Serviço</p>
-                <p className="text-3xl font-black tabular-nums text-zinc-900 group-hover:text-brand-accent transition-colors">
-                  {trip.osNumber || `#${trip.id.slice(-6).toUpperCase()}`}
-                </p>
-              </div>
-              <div className="mt-4 flex items-center gap-2">
-                <Clock size={12} className="text-zinc-300" />
-                <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider">
-                  Emissão: {format(new Date(), "dd/MM/yyyy HH:mm", { locale: ptBR })}
-                </p>
-              </div>
-            </div>
-          </div>
-
-          {/* Main Content Grid */}
-          <div className="grid grid-cols-12 gap-12">
-            {/* Left Column - 7/12 */}
-            <div className="col-span-12 lg:col-span-7 space-y-12">
-              {/* Trip Title & Type Section */}
-              <div className="relative">
-                <div className="absolute -left-12 top-0 bottom-0 w-2 bg-brand-accent" />
-                <span className={cn(
-                  "px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-widest border mb-4 inline-block",
-                  trip.tripType === 'mercosur' ? "bg-indigo-50 border-indigo-100 text-indigo-600" :
-                  trip.tripType === 'interstate' ? "bg-amber-50 border-amber-100 text-amber-600" :
-                  "bg-emerald-50 border-emerald-100 text-emerald-600"
-                )}>
-                  Operação {trip.tripType === 'state' ? 'Estadual' : trip.tripType === 'interstate' ? 'Interestadual' : 'Mercosul'}
+            {/* Core Voyage Content Grid */}
+            <div className="space-y-8">
+              <div className="bg-zinc-50 border border-zinc-200 rounded-2xl p-6 relative">
+                <span className="absolute -top-2.5 left-4 bg-white px-3 py-0.5 border border-zinc-200 text-[8px] font-black text-zinc-500 rounded-full uppercase tracking-wider">
+                  1. DADOS CADASTRAIS DA VIAGEM
                 </span>
-                <h2 className="text-4xl font-black uppercase tracking-tighter text-zinc-900 leading-[0.95]" contentEditable suppressContentEditableWarning>
-                  {trip.title}
-                </h2>
-              </div>
-
-              {/* Visual Timeline Itinerary */}
-              <div className="bg-zinc-50 rounded-[40px] p-10 border border-zinc-100">
-                <div className="flex items-center gap-3 mb-8">
-                  <div className="w-8 h-8 rounded-xl bg-zinc-900 flex items-center justify-center text-white">
-                    <Navigation size={18} strokeWidth={2.5} />
-                  </div>
-                  <h3 className="text-sm font-black uppercase tracking-widest text-zinc-900">Plano de Rota & Itinerário</h3>
-                </div>
-
-                <div className="relative pl-10 space-y-10">
-                  {/* Timeline Line */}
-                  <div className="absolute left-[13px] top-2 bottom-2 w-1 bg-zinc-200" />
-                  
-                  {/* Origin */}
-                  <div className="relative">
-                    <div className="absolute -left-[35px] top-1 w-6 h-6 rounded-full bg-zinc-900 border-4 border-white shadow-lg flex items-center justify-center z-10">
-                      <div className="w-1.5 h-1.5 rounded-full bg-brand-accent" />
-                    </div>
-                    <div>
-                      <p className="text-[10px] font-black text-zinc-400 uppercase tracking-widest mb-1">Ponto de Partida</p>
-                      <p className="text-xl font-black uppercase text-zinc-900 tracking-tight" contentEditable suppressContentEditableWarning>{trip.origin}</p>
-                      <div className="flex items-center gap-2 mt-2">
-                        <Calendar size={12} className="text-zinc-300" />
-                        <span className="text-[10px] font-bold text-zinc-500 uppercase">{format(parseISO(trip.startDate), "dd/MM/yyyy • HH:mm")}</span>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Stops */}
-                  {trip.stops && trip.stops.length > 0 && trip.stops.map((stop, idx) => (
-                    <div key={idx} className="relative">
-                      <div className="absolute -left-[32px] top-2 w-4 h-4 rounded-full bg-zinc-100 border-2 border-zinc-300 z-10" />
-                      <div className="flex items-center justify-between group">
-                        <div className="flex-1">
-                          <p className="text-[9px] font-black text-zinc-400 uppercase tracking-widest mb-0.5">Escala Operacional {idx + 1}</p>
-                          <p className="text-base font-black uppercase text-zinc-700" contentEditable suppressContentEditableWarning>{stop.location}</p>
-                        </div>
-                        <div className="bg-white px-3 py-1.5 rounded-xl border border-zinc-200 flex items-center gap-2 shadow-sm">
-                          <Clock size={12} className="text-brand-accent" />
-                          <span className="text-[11px] font-black tabular-nums text-zinc-900">{stop.arrivalTime}</span>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-
-                  {/* Destination */}
-                  <div className="relative pt-4">
-                    <div className="absolute -left-[35px] top-6 w-6 h-6 rounded-full bg-brand-accent border-4 border-white shadow-lg flex items-center justify-center z-10">
-                      <MapPin size={12} className="text-zinc-900" />
-                    </div>
-                    <div>
-                      <p className="text-[10px] font-black text-zinc-400 uppercase tracking-widest mb-1">Destino Final</p>
-                      <p className="text-xl font-black uppercase text-zinc-900 tracking-tight" contentEditable suppressContentEditableWarning>{trip.destination}</p>
-                      {trip.endDate && (
-                        <div className="flex items-center gap-2 mt-2">
-                          <Calendar size={12} className="text-zinc-300" />
-                          <span className="text-[10px] font-bold text-zinc-500 uppercase">Previsão Retorno: {format(parseISO(trip.endDate), "dd/MM/yyyy • HH:mm")}</span>
-                        </div>
-                      )}
-                    </div>
+                
+                <div>
+                  <h2 className="text-xl font-extrabold uppercase tracking-tight text-zinc-900 mb-1">{trip.title}</h2>
+                  <div className="flex items-center gap-1.5 text-[8.5px] text-zinc-500 font-extrabold uppercase">
+                    <MapPin size={10} className="text-orange-500" />
+                    <span>EMBARQUE: <strong className="text-zinc-800">{trip.origin}</strong></span>
+                    <span className="text-zinc-400 mx-1">➔</span>
+                    <span>DESEMBARQUE: <strong className="text-zinc-800">{trip.destination}</strong></span>
                   </div>
                 </div>
-              </div>
 
-              {/* Notes Section with improved styling */}
-              {trip.notes && (
-                <div className="p-10 border-2 border-zinc-100 rounded-[40px] relative overflow-hidden bg-zinc-50/30">
-                  <div className="flex items-center gap-3 mb-6">
-                    <div className="w-8 h-8 rounded-xl bg-zinc-900 flex items-center justify-center text-white">
-                      <FileText size={18} strokeWidth={2.5} />
-                    </div>
-                    <h3 className="text-sm font-black uppercase tracking-widest text-zinc-900">Observações Operacionais</h3>
+                <div className="grid grid-cols-3 gap-4 mt-4 pt-4 border-t border-zinc-200/50">
+                  <div>
+                    <h5 className="text-[7px] text-zinc-400 font-black uppercase tracking-widest leading-none mb-1">Percurso</h5>
+                    <p className="text-[9px] font-black text-zinc-800 uppercase">
+                      {trip.tripType === 'mercosur' ? 'Merconul / Intl.' : trip.tripType === 'interstate' ? 'Interestadual' : 'Estadual'}
+                    </p>
                   </div>
-                  <div className="bg-white p-6 rounded-3xl border border-zinc-100 shadow-sm">
-                    <p className="text-[13px] text-zinc-600 leading-relaxed font-medium italic" contentEditable suppressContentEditableWarning>
-                      {trip.notes}
+                  <div>
+                    <h5 className="text-[7px] text-zinc-400 font-black uppercase tracking-widest leading-none mb-1">Início Realizado/Escalado</h5>
+                    <p className="text-[9px] font-black text-zinc-800 uppercase">
+                      {format(new Date(trip.startDate), 'dd MMM yyyy • HH:mm', { locale: ptBR })}
+                    </p>
+                  </div>
+                  <div>
+                    <h5 className="text-[7px] text-zinc-400 font-black uppercase tracking-widest leading-none mb-1">Status Oficial</h5>
+                    <p className={cn(
+                      "text-[9px] font-extrabold uppercase",
+                      trip.status === 'active' ? 'text-emerald-600' : trip.status === 'completed' ? 'text-blue-600' : 'text-amber-600'
+                    )}>
+                      {trip.status === 'active' ? '● Em Curso' : trip.status === 'scheduled' ? 'Agendada' : 'Finalizada'}
                     </p>
                   </div>
                 </div>
-              )}
-            </div>
+              </div>
 
-            {/* Right Column - 5/12 */}
-            <div className="col-span-12 lg:col-span-5 space-y-12">
-              {/* Resources & Team - High density cards */}
-              <div className="space-y-6">
-                <div className="flex items-center justify-between px-2">
-                   <h3 className="text-sm font-black uppercase tracking-[0.2em] text-zinc-900">Equipe & Recursos</h3>
-                   <div className="px-3 py-1 bg-zinc-900 text-brand-accent text-[8px] font-black rounded-lg uppercase tracking-widest">Ativos</div>
-                </div>
-
-                <div className="space-y-4">
-                  {/* Vehicle Card */}
-                  <div className="p-6 bg-zinc-900 rounded-[35px] text-white shadow-xl group transition-all hover:scale-[1.02]">
-                    <div className="flex justify-between items-start mb-6">
-                      <div className="w-12 h-12 rounded-2xl bg-white/10 flex items-center justify-center text-brand-accent">
-                        <Bus size={24} />
-                      </div>
-                      <div className="text-right">
-                        <p className="text-[8px] font-black text-zinc-500 uppercase tracking-widest">Placa Mercosul</p>
-                        <p className="text-lg font-black tracking-tight" contentEditable suppressContentEditableWarning>{vehicle?.plate || '---'}</p>
-                      </div>
-                    </div>
-                    <div className="space-y-4">
-                      <div>
-                        <p className="text-[9px] font-black text-zinc-500 uppercase tracking-widest mb-1">Equipamento / Modelo</p>
-                        <p className="text-sm font-black uppercase tracking-tight" contentEditable suppressContentEditableWarning>{vehicle?.model || 'Equipamento não vinculado'}</p>
-                      </div>
-                      <div className="flex justify-between items-center text-[10px] font-bold text-zinc-400">
-                         <span className="uppercase tracking-widest">Capacidade Nominal</span>
-                         <span className="text-white font-black">{vehicle?.capacity || 0} Passageiros</span>
-                      </div>
+              {/* Vehicle Scale Grid */}
+              <div className="bg-zinc-50 border border-zinc-200 rounded-2xl p-6 relative">
+                <span className="absolute -top-2.5 left-4 bg-white px-3 py-0.5 border border-zinc-200 text-[8px] font-black text-zinc-500 rounded-full uppercase tracking-wider">
+                  2. ESCALA OPERACIONAL DE EQUIPE E FROTA
+                </span>
+                
+                <div className="grid grid-cols-2 gap-6">
+                  {/* Left Column: Bus info */}
+                  <div className="space-y-3.5">
+                    <h4 className="text-[9px] font-black text-zinc-950 uppercase tracking-widest border-b border-zinc-200 pb-1 flex items-center gap-1.5">
+                      <Bus size={12} className="text-zinc-600" />
+                      Especificações do Veículo
+                    </h4>
+                    <div>
+                      <p className="text-[9px] font-black text-zinc-900 uppercase">
+                        {vehicle ? `${vehicle.model} - ${vehicle.type.toUpperCase()}` : 'PREFEITO NÃO CONFIGURADO'}
+                      </p>
+                      <p className="text-[8px] text-zinc-500 font-medium">
+                        PLACA: <strong className="text-zinc-800 font-black">{vehicle?.plate?.toUpperCase() || 'S/PLACA'}</strong> 
+                        {vehicle?.factoryYear && <span className="ml-2">• ANO FABR: <strong className="text-zinc-800 font-black">{vehicle.factoryYear}</strong></span>}
+                      </p>
+                      <p className="text-[8.5px] text-zinc-500 font-medium mt-1">
+                        Capacidade Escalada: <span className="text-zinc-800 font-extrabold">{vehicle?.capacity || '42'} Passageiros</span>
+                      </p>
                     </div>
                   </div>
 
-                  {/* Driver Card */}
-                  <div className="p-6 bg-white border-2 border-zinc-100 rounded-[35px] shadow-sm transform transition-all hover:-translate-y-1">
-                    <div className="flex items-center gap-4 mb-6">
-                      <div className="w-12 h-12 rounded-2xl bg-zinc-100 flex items-center justify-center text-zinc-900">
-                        <User size={24} />
-                      </div>
+                  {/* Right Column: Driver info */}
+                  <div className="space-y-3.5">
+                    <h4 className="text-[9px] font-black text-zinc-950 uppercase tracking-widest border-b border-zinc-200 pb-1 flex items-center gap-1.5">
+                      <User size={12} className="text-zinc-600" />
+                      Tripulantes Escalados
+                    </h4>
+                    <div className="space-y-2">
                       <div>
-                        <p className="text-[8px] font-black text-zinc-400 uppercase tracking-widest">Condutor Escalado</p>
-                        <p className="text-lg font-black uppercase text-zinc-900 leading-tight" contentEditable suppressContentEditableWarning>
-                          {driver?.name || 'Condutor a definir'}
+                        <p className="text-[9px] text-zinc-500 font-medium leading-none mb-0.5">Motorista Principal</p>
+                        <p className="text-[9.5px] font-black text-zinc-900 uppercase leading-none">
+                          {driver ? driver.name : 'SEM ESCALA PRINCIPAL'}
                         </p>
+                        {driver?.cpf && <span className="text-[7.5px] text-zinc-500 font-bold block">CPF: {driver.cpf} • TEL: {driver.phone || '---'}</span>}
                       </div>
+
+                      {secondDriver && (
+                        <div>
+                          <p className="text-[8px] text-zinc-400 font-medium leading-none mb-0.5 flex items-center gap-1">
+                            <CornerDownRight size={8} /> No Revezamento (Auxiliar)
+                          </p>
+                          <p className="text-[9px] font-bold text-zinc-700 uppercase leading-none">
+                            {secondDriver.name}
+                          </p>
+                          {secondDriver.cpf && <span className="text-[7px] text-zinc-400 block font-medium">CPF: {secondDriver.cpf || '---'}</span>}
+                        </div>
+                      )}
                     </div>
-                    {secondDriver && (
-                      <div className="pt-4 border-t border-zinc-50 space-y-1">
-                        <p className="text-[8px] font-black text-zinc-400 uppercase tracking-widest">Condutor Auxiliar</p>
-                        <p className="text-sm font-black uppercase text-zinc-700" contentEditable suppressContentEditableWarning>{secondDriver.name}</p>
-                      </div>
-                    )}
                   </div>
                 </div>
               </div>
 
-              {/* Documentation Checklist */}
-              <div className="p-10 bg-zinc-50 rounded-[40px] border border-zinc-100">
-                <div className="flex items-center gap-3 mb-8">
-                  <div className="w-8 h-8 rounded-xl bg-zinc-900 flex items-center justify-center text-white">
-                    <ShieldCheck size={18} strokeWidth={2.5} />
+              {/* Stop itineraries if present */}
+              {trip.stops && trip.stops.length > 0 && (
+                <div className="bg-zinc-50 border border-zinc-200 rounded-2xl p-6 relative">
+                  <span className="absolute -top-2.5 left-4 bg-white px-3 py-0.5 border border-zinc-200 text-[8px] font-black text-zinc-500 rounded-full uppercase tracking-wider">
+                    3. ESCALA DE PARADAS E APOIADORES
+                  </span>
+                  
+                  <div className="space-y-2">
+                    {trip.stops.map((stop, sIdx) => (
+                      <div key={sIdx} className="flex items-center justify-between text-[9px] font-bold text-zinc-800 border-b border-zinc-100 pb-1.5 last:border-none last:pb-0">
+                        <div className="flex items-center gap-2">
+                          <span className="w-5 h-5 bg-zinc-900 text-brand-accent rounded-full text-[8px] font-black flex items-center justify-center">
+                            {sIdx + 1}
+                          </span>
+                          <span className="uppercase">{stop.location}</span>
+                        </div>
+                        <span className="font-mono text-zinc-500">{stop.arrivalTime || '--:--'}</span>
+                      </div>
+                    ))}
                   </div>
-                  <h3 className="text-sm font-black uppercase tracking-widest text-zinc-900">Documentação</h3>
+                </div>
+              )}
+
+              {/* Manifesto Table with interactive check-in buttons in Preview mode */}
+              <div className="border border-zinc-200 rounded-2xl overflow-hidden shadow-sm">
+                <div className="bg-zinc-900 px-5 py-3.5 flex justify-between items-center">
+                  <h3 className="text-[10px] font-black uppercase text-white tracking-widest flex items-center gap-2">
+                    <Users size={14} className="text-orange-500" />
+                    4. Manifesto de Passageiros ({trip.passengers?.length || 0})
+                  </h3>
+                  
+                  <div className="no-print flex items-center gap-2">
+                    <span className="text-[8px] font-black px-2 py-0.5 bg-zinc-800 text-zinc-400 rounded uppercase">
+                      {allChecked ? "PRONTO PARA EMBARQUE ✔" : "CHECK-IN ATIVO"}
+                    </span>
+                  </div>
                 </div>
                 
-                <div className="space-y-4">
-                  {(trip.documentation || []).map((doc, idx) => (
-                    <div key={idx} className="flex items-center justify-between p-4 bg-white rounded-2xl border border-zinc-100 shadow-sm transition-all hover:border-brand-accent/30 group">
-                      <span className="text-[11px] font-black text-zinc-700 uppercase tracking-tight" contentEditable suppressContentEditableWarning>{doc.label}</span>
-                      <div className={cn(
-                        "w-5 h-5 rounded-lg border-2 flex items-center justify-center transition-all",
-                        doc.checked 
-                          ? "bg-zinc-900 border-zinc-900 text-brand-accent" 
-                          : "border-zinc-200 bg-white"
-                      )}>
-                        {doc.checked && <Check size={12} strokeWidth={4} />}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Passenger Manifest - High End Table */}
-          <div className="mt-16 bg-zinc-900 rounded-[50px] p-12 text-white shadow-2xl relative overflow-hidden">
-            {/* Visual background element */}
-            <div className="absolute top-0 right-0 w-64 h-64 bg-white/5 rounded-full -mr-32 -mt-32 blur-3xl pointer-events-none" />
-            
-            <div className="flex flex-col md:flex-row md:items-end justify-between gap-6 mb-10 relative z-10">
-              <div>
-                <h3 className="text-3xl font-black uppercase tracking-tighter mb-2 flex items-center gap-4">
-                   Manifesto de Passageiros
-                   <div className="px-4 py-1.5 rounded-2xl bg-white/10 border border-white/10 text-brand-accent text-sm font-black tabular-nums">
-                     {String(trip.passengers.length).padStart(2, '0')}
-                   </div>
-                </h3>
-                <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-[0.2em]">Ocupantes registrados para esta operação</p>
-              </div>
-              <div className="flex items-center gap-4 no-print">
-                <Users size={20} className="text-brand-accent" />
-                <span className="text-[10px] font-black uppercase tracking-widest text-zinc-500">Conferência no embarque</span>
-              </div>
-            </div>
-
-            <div className="overflow-hidden rounded-[30px] border border-white/5 relative z-10">
-              <table className="w-full text-left border-collapse">
-                <thead>
-                  <tr className="bg-white/5 border-b border-white/5">
-                    <th className="px-8 py-5 text-[10px] font-black uppercase tracking-widest text-zinc-500 w-20">Nº</th>
-                    <th className="px-8 py-5 text-[10px] font-black uppercase tracking-widest text-zinc-500">Nome Completo do Passageiro</th>
-                    <th className="px-8 py-5 text-[10px] font-black uppercase tracking-widest text-zinc-500">Documento de Identidade</th>
-                    <th className="px-8 py-5 text-[10px] font-black uppercase tracking-widest text-zinc-500 text-center no-print w-24">Visto</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {(trip.passengers || []).map((p, idx) => (
-                    <tr 
-                      key={idx} 
-                      className={cn(
-                        "group transition-all border-b border-white/[0.02]",
-                        checkedPassengers[idx] ? "bg-white/[0.03]" : "hover:bg-white/[0.01]"
-                      )}
-                    >
-                      <td className="px-8 py-4 text-[13px] font-black tabular-nums text-zinc-600 group-hover:text-brand-accent transition-colors">
-                        {String(idx + 1).padStart(2, '0')}
-                      </td>
-                      <td className="px-8 py-4 text-sm font-black uppercase tracking-tight text-zinc-200" contentEditable suppressContentEditableWarning>
-                        {p.name}
-                      </td>
-                      <td className="px-8 py-4 text-sm font-bold tracking-widest text-zinc-500 tabular-nums uppercase" contentEditable suppressContentEditableWarning>
-                        {p.document}
-                      </td>
-                      <td className="px-8 py-4 text-center no-print">
-                        <button
+                <table className="w-full text-left">
+                  <thead>
+                    <tr className="bg-zinc-50 border-b border-zinc-200 text-[8px] font-black uppercase text-zinc-500">
+                      <th className="py-2.5 px-4 w-12 text-center">Nº</th>
+                      <th className="py-2.5 px-2">NOME COMPLETO DO PASSAGEIRO</th>
+                      <th className="py-2.5 px-2 w-44">DOCUMENTO (RG/CPF)</th>
+                      <th className="py-2.5 px-4 w-32 text-center no-print">CONTROLE</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {trip.passengers && trip.passengers.length > 0 ? (
+                      trip.passengers.map((p, idx) => (
+                        <tr 
+                          key={idx} 
                           onClick={() => togglePassenger(idx)}
                           className={cn(
-                            "w-10 h-10 rounded-2xl flex items-center justify-center transition-all border-2",
-                            checkedPassengers[idx] 
-                              ? "bg-brand-accent border-brand-accent text-zinc-900 shadow-[0_0_15px_rgba(255,107,0,0.3)]" 
-                              : "bg-transparent border-white/10 text-white/10 hover:border-brand-accent/50 hover:text-brand-accent"
+                            "border-b border-zinc-100 text-[9.5px] cursor-pointer hover:bg-zinc-50/80 transition-colors last:border-none",
+                            checkedPassengers[idx] && "bg-emerald-500/5 text-emerald-950 font-semibold"
                           )}
                         >
-                          <Check size={18} strokeWidth={4} />
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+                          <td className="py-2 px-4 text-center font-extrabold text-zinc-400">{idx + 1}</td>
+                          <td className="py-2 px-2 uppercase font-black">{p.name}</td>
+                          <td className="py-2 px-2 font-mono text-zinc-600 font-semibold">{p.document || 'NÃO FORNECIDO'}</td>
+                          <td className="py-2 px-4 text-center no-print">
+                            <button 
+                              type="button"
+                              className={cn(
+                                "mx-auto w-4.5 h-4.5 rounded flex items-center justify-center border transition-all",
+                                checkedPassengers[idx] 
+                                ? "bg-emerald-500 border-emerald-600 text-white" 
+                                : "border-zinc-300 hover:border-zinc-500 bg-white"
+                              )}
+                            >
+                              {checkedPassengers[idx] && <Check size={10} strokeWidth={3} />}
+                            </button>
+                          </td>
+                        </tr>
+                      ))
+                    ) : (
+                      <tr>
+                        <td colSpan={4} className="py-8 text-center text-[10px] font-semibold text-zinc-400 uppercase tracking-wider">
+                          Nenhum passageiro adicionado a esta lista de fretamento.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Notes block */}
+              {trip.notes && (
+                <div className="bg-zinc-50 border border-zinc-200 rounded-2xl p-4">
+                  <h5 className="text-[8px] text-zinc-400 font-extrabold uppercase tracking-widest mb-1">Observações da Operação</h5>
+                  <p className="text-[9px] text-zinc-700 italic uppercase leading-relaxed">{trip.notes}</p>
+                </div>
+              )}
             </div>
           </div>
 
-          {/* Attachments & Receipts Section */}
-          {trip.attachments && trip.attachments.length > 0 && (
-            <div className="mt-16 bg-zinc-50 rounded-[40px] p-12 border border-zinc-100 no-print">
-              <div className="flex items-center gap-4 mb-8">
-                <div className="w-10 h-10 rounded-2xl bg-zinc-900 flex items-center justify-center text-brand-accent shadow-lg">
-                  <FileText size={20} />
-                </div>
-                <div>
-                  <h3 className="text-xl font-black uppercase tracking-tight text-zinc-900">Documentos & Comprovantes</h3>
-                  <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Arquivos anexados a esta viagem</p>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6">
-                {(trip.attachments || []).map((file, idx) => (
-                  <div key={idx} className="group bg-white p-6 rounded-[35px] border border-zinc-100 shadow-sm hover:shadow-xl hover:border-brand-accent/20 transition-all flex flex-col gap-4">
-                    <div className="flex items-start justify-between">
-                      <div className={cn(
-                        "w-12 h-12 rounded-2xl flex items-center justify-center shadow-inner",
-                        file.type === 'pdf' ? "bg-rose-50 text-rose-500" :
-                        file.type === 'word' ? "bg-blue-50 text-blue-500" :
-                        file.type === 'excel' ? "bg-emerald-50 text-emerald-500" :
-                        "bg-brand-accent/10 text-brand-accent"
-                      )}>
-                        {file.type === 'pdf' || file.type === 'word' ? <FileText size={24} /> :
-                         file.type === 'excel' ? <FileCode size={24} /> :
-                         <Printer size={24} />}
-                      </div>
-                      <a 
-                        href={file.url} 
-                        download={file.name}
-                        className="p-3 bg-zinc-900 text-white rounded-2xl hover:bg-brand-accent hover:text-zinc-950 transition-all active:scale-90"
-                      >
-                        <FileDown size={18} />
-                      </a>
-                    </div>
-                    
-                    <div>
-                      <h4 className="text-xs font-black text-zinc-900 uppercase truncate mb-1">{file.name}</h4>
-                      <div className="flex items-center gap-2">
-                        <span className="px-2 py-0.5 rounded-full bg-zinc-100 text-[8px] font-black text-zinc-500 uppercase tracking-widest">{file.type}</span>
-                        {file.type === 'image' && (
-                          <button 
-                            onClick={() => window.open(file.url, '_blank')}
-                            className="text-[9px] font-bold text-brand-accent uppercase hover:underline"
-                          >
-                            Visualizar
-                          </button>
-                        )}
-                      </div>
-                    </div>
-
-                    {file.type === 'image' && (
-                      <div className="mt-2 rounded-2xl overflow-hidden border border-zinc-100 aspect-video bg-zinc-50">
-                        <img src={file.url} alt={file.name} className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500" referrerPolicy="no-referrer" />
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Footer - Signatures & Legal */}
-          <div className="mt-20">
-            <div className="grid grid-cols-2 gap-20 items-end mb-16">
-              <div className="text-center group">
-                <div className="w-full h-[2px] bg-zinc-200 mb-6 relative overflow-hidden">
-                   <div className="absolute inset-0 bg-zinc-900 transform -translate-x-full group-hover:translate-x-0 transition-transform duration-700" />
-                </div>
-                <p className="text-[11px] font-black uppercase text-zinc-900 tracking-widest mb-1 italic">Condutor Titular</p>
-                <p className="text-[8px] font-bold text-zinc-400 uppercase tracking-[0.2em] underline underline-offset-4 decoration-zinc-100">Assinatura do Profissional Responsável</p>
-              </div>
-              
-              <div className="text-center group">
-                <div className="w-full h-[2px] bg-zinc-200 mb-6 relative overflow-hidden">
-                   <div className="absolute inset-0 bg-zinc-900 transform translate-x-full group-hover:translate-x-0 transition-transform duration-700" />
-                </div>
-                <p className="text-[11px] font-black uppercase text-zinc-900 tracking-widest mb-1 italic">Fiscalização / Despacho</p>
-                <p className="text-[8px] font-bold text-zinc-400 uppercase tracking-[0.2em] underline underline-offset-4 decoration-zinc-100">Validação Interna DM Turismo</p>
-              </div>
-            </div>
-
-            <div className="flex flex-col items-center gap-6 pt-10 border-t-2 border-zinc-50">
-               <div className="flex items-center gap-8">
-                 <div className="flex items-center gap-2">
-                   <Check size={14} className="text-emerald-500" />
-                   <p className="text-[8px] font-black text-zinc-400 uppercase tracking-widest">Documento Digital Auditado</p>
-                 </div>
-                 <div className="flex items-center gap-2">
-                   <Check size={14} className="text-emerald-500" />
-                   <p className="text-[8px] font-black text-zinc-400 uppercase tracking-widest">Válido para Trânsito Nacional</p>
-                 </div>
+          {/* Compliance & Signatures Footer area */}
+          <div className="pt-12 mt-8 border-t border-zinc-200">
+             <div className="grid grid-cols-2 gap-10">
+               <div>
+                  <div className="w-48 border-b border-zinc-400 mx-auto mb-2" />
+                  <p className="text-[7px] text-zinc-400 font-medium text-center uppercase leading-none">ASSINATURA DO MOTORISTA RESPONSÁVEL</p>
+                  <p className="text-[8px] text-zinc-750 font-black text-center mt-1 uppercase">
+                    {driver ? driver.name : 'DECLARAÇÃO DE RECEBIMENTO'}
+                  </p>
                </div>
-               <p className="text-[7px] font-bold text-zinc-300 uppercase tracking-[0.5em] text-center max-w-xl leading-relaxed">
-                 ESTA ORDEM DE SERVIÇO É UM DOCUMENTO INTERNO DE USO EXCLUSIVO DA DM TURISMO. A REPRODUÇÃO NÃO AUTORIZADA PODE RESULTAR EM SANÇÕES ADMINISTRATIVAS. AS INFORMAÇÕES AQUI CONTIDAS SÃO PROTEGIDAS PELA LGPD.
-               </p>
-            </div>
+               <div>
+                  <div className="w-48 border-b border-zinc-400 mx-auto mb-2" />
+                  <p className="text-[7px] text-zinc-400 font-medium text-center uppercase leading-none">VISTO OPERACIONAL • GESTÃO DM TURISMO</p>
+                  <p className="text-[8px] text-zinc-750 font-black text-center mt-1 uppercase">LOGÍSTICA DE ESCALAS</p>
+               </div>
+             </div>
+
+             <div className="flex justify-between items-center mt-10 text-[6.5px] text-zinc-400 font-black uppercase tracking-wider">
+               <span>Página 01 / 01</span>
+               <span>Código Autenticidade: {trip.id.toUpperCase()}</span>
+               <span>DM TURISMO LTDA • SISTEMA DE GESTÃO FLORESTAL</span>
+             </div>
           </div>
         </div>
       </div>

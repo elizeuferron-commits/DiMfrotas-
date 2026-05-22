@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Wifi, WifiOff, RefreshCw, Smartphone } from 'lucide-react';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion, AnimatePresence } from 'framer-motion';
 import { cn } from '../lib/utils';
 
 export const OfflineSync: React.FC = () => {
@@ -12,15 +12,20 @@ export const OfflineSync: React.FC = () => {
     const handleOnline = () => {
       setIsOnline(true);
       setShowStatus(true);
-      if (statusTimer) clearTimeout(statusTimer);
       const timer = setTimeout(() => setShowStatus(false), 5000);
-      setStatusTimer(timer);
+      setStatusTimer(prev => {
+        if (prev) clearTimeout(prev);
+        return timer;
+      });
     };
 
     const handleOffline = () => {
       setIsOnline(false);
       setShowStatus(true);
-      if (statusTimer) clearTimeout(statusTimer);
+      setStatusTimer(prev => {
+        if (prev) clearTimeout(prev);
+        return null;
+      });
     };
 
     window.addEventListener('online', handleOnline);
@@ -29,9 +34,12 @@ export const OfflineSync: React.FC = () => {
     return () => {
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
-      if (statusTimer) clearTimeout(statusTimer);
+      setStatusTimer(prev => {
+        if (prev) clearTimeout(prev);
+        return null;
+      });
     };
-  }, [statusTimer]);
+  }, []);
 
   return (
     <>

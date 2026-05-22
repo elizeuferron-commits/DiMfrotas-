@@ -49,7 +49,21 @@
         "licenseExpiration": { "type": "string", "format": "date" },
         "phone": { "type": "string" },
         "email": { "type": "string" },
-        "status": { "type": "string", "enum": ["active", "inactive"] }
+        "status": { "type": "string", "enum": ["active", "inactive"] },
+        "workSchedule": {
+          "type": "object",
+          "properties": {
+            "monToFri": {
+              "type": "object",
+              "properties": {
+                "morning": { "type": "object", "properties": { "start": { "type": "string" }, "end": { "type": "string" } } },
+                "afternoon": { "type": "object", "properties": { "start": { "type": "string" }, "end": { "type": "string" } } }
+              }
+            },
+            "saturday": { "type": "object", "properties": { "start": { "type": "string" }, "end": { "type": "string" } } },
+            "sunday": { "type": "object", "properties": { "start": { "type": "string" }, "end": { "type": "string" } } }
+          }
+        }
       },
       "required": ["name", "role", "status"]
     },
@@ -113,6 +127,24 @@
         "minQuantity": { "type": "number" }
       },
       "required": ["name", "category", "quantity", "unit"]
+    },
+    "StockTransaction": {
+      "title": "Stock Transaction",
+      "description": "Inventory entry and exit records",
+      "type": "object",
+      "properties": {
+        "itemId": { "type": "string" },
+        "itemName": { "type": "string" },
+        "category": { "type": "string" },
+        "type": { "type": "string", "enum": ["ENTRADA", "SAÍDA"] },
+        "quantity": { "type": "number" },
+        "unit": { "type": "string" },
+        "employeeId": { "type": "string" },
+        "employeeName": { "type": "string" },
+        "justification": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["itemId", "itemName", "type", "quantity", "timestamp"]
     },
     "Checklist": {
       "title": "Checklist",
@@ -360,6 +392,18 @@
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["name", "client", "status"]
+    },
+    "FeaturedVideo": {
+      "title": "Featured Video",
+      "description": "Videos featured on the dashboard",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "url": { "type": "string" },
+        "title": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["url", "title"]
     }
   },
   "firestore": {
@@ -371,6 +415,7 @@
     "fuel_entries": { "schema": "FuelEntry", "description": "Tank refill history" },
     "maintenance_logs": { "schema": "MaintenanceLog", "description": "Maintenance history" },
     "stock_items": { "schema": "StockItem", "description": "General inventory" },
+    "stock_transactions": { "schema": "StockTransaction", "description": "Inventory changes ledger" },
     "checklists": { "schema": "Checklist", "description": "Operational inspections" },
     "financial_transactions": { "schema": "FinancialTransaction", "description": "Cash flow records" },
     "trips": { "schema": "Trip", "description": "Trip and transit records" },
@@ -381,6 +426,8 @@
     "media_shares": { "schema": "MediaShare", "description": "Shared media (images/videos) for the community" },
     "news_feed": { "schema": "NewsItem", "description": "Official news and announcements feed" },
     "journeys": { "schema": "Journey", "description": "Employee time tracking logs" },
-    "chartered_routes": { "schema": "CharteredRoute", "description": "Fixed recurring route management" }
+    "chartered_routes": { "schema": "CharteredRoute", "description": "Fixed recurring route management" },
+    "featured_videos": { "schema": "FeaturedVideo", "description": "Videos featured on the dashboard" },
+    "test": { "schema": { "type": "object", "properties": { "status": { "type": "string" } } }, "description": "Connection test collection" }
   }
 }

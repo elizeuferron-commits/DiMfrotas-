@@ -1,34 +1,49 @@
 import { UserRole } from '../types';
 
-export const ROLE_PERMISSIONS: Record<string, string[]> = {
+export let ROLE_PERMISSIONS: Record<string, string[]> = {
   'Dono / Proprietário': [
     'fleet', 'dashboard', 'finance', 'vencimentos', 'fuel', 
     'maintenance', 'staff', 'trips', 'os', 'inventory', 'reports',
-    'journey', 'fretamento', 'ai-consultant', 'users', 'creacao'
+    'fretamento', 'criador', 'point'
   ],
-  'Motorista': ['fuel', 'maintenance', 'os', 'dashboard', 'journey', 'ai-consultant'],
-  'Limpeza / Conservação': ['inventory', 'fuel', 'os', 'dashboard', 'ai-consultant'],
+  'Motorista': ['fuel', 'maintenance', 'os', 'dashboard', 'criador'],
+  'Limpeza / Conservação': ['inventory', 'fuel', 'os', 'dashboard', 'criador'],
   'Administrativo': [
     'finance', 'inventory', 'reports', 'trips', 'os', 'staff', 'vencimentos', 'dashboard',
-    'fretamento', 'journey', 'ai-consultant'
+    'fretamento', 'criador'
   ],
   'Gestor de Frotas': [
-    'fleet', 'maintenance', 'staff', 'fuel', 'reports', 'dashboard', 'journey', 'ai-consultant'
+    'fleet', 'maintenance', 'staff', 'fuel', 'reports', 'dashboard', 'criador'
   ],
   'Coordenador Logístico': [
     'fleet', 'dashboard', 'vencimentos', 'fuel', 'maintenance', 'staff', 'trips', 'os', 'inventory', 'reports',
-    'journey', 'fretamento', 'ai-consultant'
+    'fretamento', 'criador'
   ],
   'Visitante': ['dashboard', 'trips']
+};
+
+export const setRolePermissions = (newPermissions: Record<string, string[]>) => {
+  ROLE_PERMISSIONS = newPermissions;
 };
 
 export const hasPermission = (
   role: string | undefined, 
   sectionId: string, 
   email?: string, 
-  userPermissions?: string[]
+  userPermissions?: string[],
+  name?: string
 ): boolean => {
+  // Check strict 'point' tool restriction first: only owners/proprietários or elizeuferron@gmail.com
+  if (sectionId === 'point') {
+    const isOwner = role === 'Dono / Proprietário' || role === 'Dono' || role === 'Proprietário';
+    const isElizeuEmail = email === 'elizeuferron@gmail.com';
+    
+    return isElizeuEmail || isOwner;
+  }
+
+  // Always allow elizeu for everything else
   if (email === 'elizeuferron@gmail.com') return true;
+
   if (!role) return false;
   
   // If user has custom permissions, they override role-based permissions

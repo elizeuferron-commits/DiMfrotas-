@@ -4,7 +4,7 @@ import {
   ChevronRight,
   Loader2 
 } from 'lucide-react';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion, AnimatePresence } from 'framer-motion';
 import { cn } from '../lib/utils';
 
 interface ModalProps {

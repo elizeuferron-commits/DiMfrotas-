@@ -11,18 +11,71 @@ async function startServer() {
 
   app.use(express.json({ limit: '20mb' }));
 
-  // Initialize Gemini lazily
-  let genAI: any = null;
-  const getGenAI = () => {
-    if (!genAI) {
+  // Initialize Gemini
+  let ai: any = null;
+  const getAI = () => {
+    if (!ai) {
       const geminiKey = process.env.GEMINI_API_KEY;
       if (!geminiKey) {
         throw new Error("GEMINI_API_KEY is required but not found in environment");
       }
-      genAI = new GoogleGenAI({ apiKey: geminiKey });
+      ai = new GoogleGenAI({ 
+        apiKey: geminiKey,
+        httpOptions: {
+          headers: {
+            'User-Agent': 'aistudio-build',
+          }
+        }
+      });
     }
-    return genAI;
+    return ai;
   };
+
+  // API Route: Scan document and extract financial data
+  app.post("/api/finance/scan-document", async (req, res) => {
+    const { base64Data, mimeType } = req.body;
+
+    if (!base64Data || !mimeType) {
+      return res.status(400).json({ error: "Missing file data or mime type" });
+    }
+
+    try {
+      const client = getAI();
+      const response = await client.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents: [
+          {
+            parts: [
+              { text: `Extraia informações financeiras deste documento (boleto, nota fiscal ou recibo). 
+Retorne APENAS um objeto JSON com os seguintes campos:
+- description: Uma breve descrição do que se trata (ex: "Energia Elétrica", "Peças Mecânica").
+- supplier: Nome do fornecedor ou emissor.
+- amount: Valor total como número (ex: 150.50).
+- dueDate: Data de vencimento no formato YYYY-MM-DD.
+- barcode: O código de barras numérico (linha digitável), se disponível. Remova espaços ou pontos.
+
+Se não encontrar algum campo, retorne null para ele. Não inclua Markdown ou texto explicativo, apenas o JSON.` },
+              {
+                inlineData: {
+                  data: base64Data,
+                  mimeType
+                }
+              }
+            ]
+          }
+        ],
+        config: {
+          responseMimeType: "application/json"
+        }
+      });
+
+      const extractedData = JSON.parse(response.text || "{}");
+      res.json(extractedData);
+    } catch (error) {
+      console.error("Gemini Scan Error:", error);
+      res.status(500).json({ error: "Internal server error during document scanning" });
+    }
+  });
 
   // API Route: Health check
   app.get("/api/health", (req, res) => {
@@ -38,18 +91,28 @@ async function startServer() {
     }
 
     try {
-      const model = getGenAI().getGenerativeModel({ model: "gemini-3-flash-preview" });
-      const response = await model.generateContent([
-        { text: "Extraia a lista de passageiros deste documento. Retorne um JSON com um array de objetos contendo 'name' (NOME COMPLETO EM MAIÚSCULAS) e 'document' (CPF ou RG). Se não houver documento, use 'S/D'. Ignore cabeçalhos ou informações não relacionadas a passageiros." },
-        {
-          inlineData: {
-            data: base64Data,
-            mimeType
+      const client = getAI();
+      const response = await client.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents: [
+          {
+            parts: [
+              { text: "Extraia a lista de passageiros deste documento. Retorne um JSON com um array de objetos contendo 'name' (NOME COMPLETO EM MAIÚSCULAS) e 'document' (CPF ou RG). Se não houver documento, use 'S/D'. Ignore cabeçalhos ou informações não relacionadas a passageiros." },
+              {
+                inlineData: {
+                  data: base64Data,
+                  mimeType
+                }
+              }
+            ]
           }
+        ],
+        config: {
+          responseMimeType: "application/json"
         }
-      ]);
+      });
 
-      const extractedData = JSON.parse(response.response.text() || "[]");
+      const extractedData = JSON.parse(response.text || "[]");
       res.json(extractedData);
     } catch (error) {
       console.error("Gemini Extraction Error:", error);
@@ -62,24 +125,28 @@ async function startServer() {
     const { message, systemInstruction, history } = req.body;
 
     try {
-      const model = getGenAI().getGenerativeModel({ 
-        model: "gemini-3-flash-preview",
-        systemInstruction: systemInstruction || "Você é um assistente especializado na DM Turismo."
-      });
-
+      const client = getAI();
+      
+      const contents: any[] = [];
       if (history && history.length > 0) {
-        const chat = model.startChat({
-          history: history.map((h: any) => ({
+        history.forEach((h: any) => {
+          contents.push({
             role: h.role === 'user' ? 'user' : 'model',
             parts: [{ text: h.content }]
-          }))
+          });
         });
-        const result = await chat.sendMessage(message);
-        return res.json({ text: result.response.text() });
-      } else {
-        const result = await model.generateContent(message);
-        return res.json({ text: result.response.text() });
       }
+      contents.push({ role: 'user', parts: [{ text: message }] });
+
+      const response = await client.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents,
+        config: {
+          systemInstruction: systemInstruction || "Você é um assistente especializado na DM Turismo."
+        }
+      });
+
+      return res.json({ text: response.text });
     } catch (error) {
       console.error("Gemini Chat Error:", error);
       res.status(500).json({ error: "Failed to generate AI response" });
@@ -95,10 +162,16 @@ async function startServer() {
     }
 
     try {
-      const model = getGenAI().getGenerativeModel({ model: "gemini-3-flash-preview" });
-      const response = await model.generateContent(`Extraia as informações desta viagem do seguinte texto: "${text}"`);
+      const client = getAI();
+      const response = await client.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents: `Extraia as informações desta viagem do seguinte texto: "${text}"`,
+        config: {
+          responseMimeType: "application/json"
+        }
+      });
       
-      const extractedData = JSON.parse(response.response.text() || "{}");
+      const extractedData = JSON.parse(response.text || "{}");
       res.json(extractedData);
     } catch (error) {
       console.error("Gemini Smart Fill Error:", error);
@@ -106,16 +179,39 @@ async function startServer() {
     }
   });
 
+  // Force development mode if not explicitly set to production
+  if (!process.env.NODE_ENV) {
+    process.env.NODE_ENV = "development";
+  }
+  
+  console.log(`Starting server in ${process.env.NODE_ENV} mode`);
+
   // Vite middleware for development
   if (process.env.NODE_ENV !== "production") {
     const { createServer } = await import("vite");
     const vite = await createServer({
+      root: process.cwd(),
       server: { middlewareMode: true },
       appType: "spa",
+      base: "/",
     });
+    
+    // Log requests in dev mode
+    app.use((req, res, next) => {
+      if (req.url.includes('logo_dm.svg')) {
+        console.log(`Dev Log: Requesting logo_dm.svg - URL: ${req.url}`);
+      }
+      next();
+    });
+
     app.use(vite.middlewares);
   } else {
-    const distPath = path.join(process.cwd(), 'dist');
+    const fs = await import("fs");
+    let distPath = path.join(process.cwd(), 'dist');
+    if (!fs.existsSync(distPath)) {
+      distPath = path.join(process.cwd(), 'build');
+    }
+    console.log(`Serving static files from: ${distPath}`);
     app.use(express.static(distPath));
     app.get('*all', (req, res) => {
       res.sendFile(path.join(distPath, 'index.html'));

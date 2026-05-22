@@ -41,7 +41,8 @@ service cloud.firestore {
              data.capacity is number &&
              data.currentOdometer is number &&
              data.status in ['available', 'maintenance', 'trip'] &&
-             (data.get('updatedAt', '') is string);
+             (data.get('updatedAt', '') is string) &&
+             (data.get('photoUrl', '') is string && data.get('photoUrl', '').size() <= 2000000); // Higher limit for base64 if needed, but preferably used with storage. Here assuming string/url
     }
 
     function isValidFinancial(data) {
@@ -112,6 +113,12 @@ service cloud.firestore {
              data.status in ['active', 'inactive'];
     }
 
+    function isValidFeaturedVideo(data) {
+      return data.url is string && data.url.size() <= 1000 &&
+             data.title is string && data.title.size() <= 200 &&
+             (data.get('createdAt', '') is string || data.get('createdAt', '') is timestamp);
+    }
+
     function isAdministrative() {
       return isSignedIn() && (
         request.auth.token.email == 'elizeuferron@gmail.com' ||
@@ -119,6 +126,10 @@ service cloud.firestore {
         isManager() || 
         (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['Dono / Proprietário', 'Gestor de Frotas', 'Coordenador Logístico', 'Administrativo'])
       );
+    }
+
+    match /test/{docId} {
+      allow read: if true;
     }
 
     // --- Collection Routes ---
@@ -150,8 +161,9 @@ service cloud.firestore {
     match /vehicles/{vehicleId} {
       allow read: if isSignedIn();
       allow create: if isManager() && isValidVehicle(incoming());
-      allow update: if isSignedIn() && isValidVehicle(incoming()) && (
-        isManager() || (incoming().diff(existing()).affectedKeys().hasOnly(['currentOdometer', 'updatedAt', 'status']))
+      allow update: if isSignedIn() && (
+        (isManager() && isValidVehicle(incoming())) || 
+        (incoming().diff(existing()).affectedKeys().hasOnly(['currentOdometer', 'updatedAt', 'status', 'photoUrl']))
       );
       allow delete: if isAdmin();
     }
@@ -225,6 +237,12 @@ service cloud.firestore {
       allow update: if isManager() && isValidStockItem(incoming());
       allow delete: if isAdmin();
     }
+
+    match /stock_transactions/{txId} {
+      allow read: if isSignedIn();
+      allow create: if isManager();
+      allow delete: if isAdmin();
+    }
     
     match /media_shares/{shareId} {
       allow read: if isSignedIn();
@@ -246,7 +264,14 @@ service cloud.firestore {
 
     match /chartered_routes/{routeId} {
       allow read: if isSignedIn();
-      allow create, update, delete: if isAdministrative() && isValidCharteredRoute(incoming());
+      allow create, update: if isAdministrative() && isValidCharteredRoute(incoming());
+      allow delete: if isAdministrative();
+    }
+
+    match /featured_videos/{videoId} {
+      allow read: if isSignedIn();
+      allow create, update: if isAdministrative() && isValidFeaturedVideo(incoming());
+      allow delete: if isAdministrative();
     }
     
     match /backups/{backupId} {

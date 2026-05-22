@@ -1,4 +1,4 @@
-package com.dmfrotas.app;
+package com.dmturismo.app;
 
 import com.getcapacitor.BridgeActivity;
 

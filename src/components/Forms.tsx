@@ -14,48 +14,83 @@ import {
   Share2,
   Camera,
   X,
-  Lock
+  Lock,
+  Clock,
+  FileSpreadsheet,
+  Globe,
+  Upload
 } from 'lucide-react';
 import { Input, Select, Button } from './UI';
 import { cn } from '../lib/utils';
+import { WorkSchedule } from '../types';
 
 export const VehicleForm = ({ onSubmit, loading, initialData }: any) => (
-  <form onSubmit={onSubmit} className="space-y-2">
-    <div className="grid grid-cols-2 gap-6">
-      <Input label="Placa" placeholder="ABC-1234" icon={Hash} required name="plate" defaultValue={initialData?.plate} />
-      <Select 
-        label="Tipo" 
-        icon={Bus} 
-        name="type"
-        defaultValue={initialData?.type}
-        options={[
-          { value: 'van', label: 'Van (Executiva)' },
-          { value: 'bus', label: 'Ônibus (Turismo)' }
-        ]} 
-      />
+  <form onSubmit={onSubmit} className="space-y-4">
+    <div className="p-4 bg-zinc-900/30 border border-zinc-800 rounded-2xl space-y-4">
+      <div className="flex items-center gap-2 border-b border-zinc-800 pb-2 mb-2">
+        <Bus size={14} className="text-brand-accent" />
+        <h3 className="text-[10px] font-black text-white uppercase tracking-widest">Informações Básicas</h3>
+      </div>
+      <div className="grid grid-cols-2 gap-6">
+        <Input label="Placa" placeholder="ABC-1234" icon={Hash} required name="plate" defaultValue={initialData?.plate} />
+        <Select 
+          label="Tipo de Veículo" 
+          icon={Bus} 
+          name="type"
+          defaultValue={initialData?.type}
+          options={[
+            { value: 'van', label: 'Van (Executiva)' },
+            { value: 'bus', label: 'Ônibus (Turismo)' }
+          ]} 
+        />
+      </div>
+      <div className="grid grid-cols-2 gap-6">
+        <Input label="Modelo/Marca" placeholder="Ex: Mercedes-Benz Sprinter" icon={Bus} required name="model" defaultValue={initialData?.model} />
+        <Input label="Ano de Fabr." placeholder="2023" icon={Calendar} required name="factoryYear" defaultValue={initialData?.factoryYear} />
+      </div>
+      <div className="grid grid-cols-2 gap-6">
+        <Input label="Capacidade (Passageiros)" type="number" placeholder="15" icon={Users} required name="capacity" defaultValue={initialData?.capacity} />
+        <Input label="Odômetro Atual (KM)" type="number" placeholder="50.000" icon={Hash} required name="currentOdometer" defaultValue={initialData?.currentOdometer} />
+      </div>
     </div>
-    <div className="grid grid-cols-2 gap-6">
-      <Input label="Modelo/Marca" placeholder="Ex: Mercedes-Benz Sprinter" icon={Bus} required name="model" defaultValue={initialData?.model} />
-      <Input label="Ano de Fabr." placeholder="2023" icon={Calendar} required name="factoryYear" defaultValue={initialData?.factoryYear} />
+
+    <div className="p-4 bg-zinc-900/30 border border-zinc-800 rounded-2xl space-y-4">
+      <div className="flex items-center gap-2 border-b border-zinc-800 pb-2 mb-2">
+        <FileSpreadsheet size={14} className="text-brand-accent" />
+        <h3 className="text-[10px] font-black text-white uppercase tracking-widest">Documentação Obrigatória</h3>
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <Input label="Venc. Licenciamento (CRLV)" type="date" icon={Calendar} required name="licenseExpiration" defaultValue={initialData?.licenseExpiration} />
+        <Input label="Venc. Seguro APP (Passageiros)" type="date" icon={Calendar} required name="insuranceExpiration" defaultValue={initialData?.insuranceExpiration} />
+        <Input label="Venc. Cronotacógrafo (INMETRO)" type="date" icon={Calendar} name="tacografoExpiration" defaultValue={initialData?.tacografoExpiration} />
+        <Input label="Venc. Licença Municipal / Alvará" type="date" icon={Calendar} name="municipalLicenseExpiration" defaultValue={initialData?.municipalLicenseExpiration} />
+      </div>
     </div>
-    <div className="grid grid-cols-2 gap-6">
-      <Input label="Capacidade (Pax)" type="number" placeholder="15" icon={Users} required name="capacity" defaultValue={initialData?.capacity} />
-      <Input label="Odômetro (KM)" type="number" placeholder="50.000" icon={Hash} required name="currentOdometer" defaultValue={initialData?.currentOdometer} />
-    </div>
-    <div className="grid grid-cols-2 gap-6">
-      <Input label="Venc. Licenciamento" type="date" icon={Calendar} required name="licenseExpiration" defaultValue={initialData?.licenseExpiration} />
-      <Input label="Venc. Turismo (ANTT/CADASTUR)" type="date" icon={Calendar} required name="tourismLicenseExpiration" defaultValue={initialData?.tourismLicenseExpiration} />
-    </div>
-    <div className="grid grid-cols-2 gap-6">
-      <Input label="Venc. Seguro Passageiros" type="date" icon={Calendar} required name="insuranceExpiration" defaultValue={initialData?.insuranceExpiration} />
-      <Input label="Próxima Revisão Preventiva" type="date" icon={Calendar} name="nextPreventiveMaintenanceDate" defaultValue={initialData?.nextPreventiveMaintenanceDate} />
+
+    <div className="p-4 bg-emerald-500/5 border border-emerald-500/10 rounded-2xl space-y-4">
+      <div className="flex items-center gap-2 border-b border-emerald-500/10 pb-2 mb-2">
+        <Globe size={14} className="text-emerald-500" />
+        <h3 className="text-[10px] font-black text-white uppercase tracking-widest">Autorizações de Turismo</h3>
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <Input label="Venc. CADASTUR (Nacional)" type="date" icon={Calendar} name="cadasturExpiration" defaultValue={initialData?.cadasturExpiration} />
+        <Input label="Venc. ANTT (Interestadual)" type="date" icon={Calendar} name="anttExpiration" defaultValue={initialData?.anttExpiration} />
+        <Input label="Venc. Estadual (DETRO/ARTESP)" type="date" icon={Calendar} name="detroArtespExpiration" defaultValue={initialData?.detroArtespExpiration} />
+      </div>
     </div>
     
-    <div className="grid grid-cols-1 gap-6">
-      <Input label="Próxima Troca de Óleo (Km)" type="number" placeholder="60.000" icon={Hash} name="nextOilChangeKM" defaultValue={initialData?.nextOilChangeKM} />
+    <div className="p-4 bg-zinc-900/30 border border-zinc-800 rounded-2xl space-y-4">
+      <div className="flex items-center gap-2 border-b border-zinc-800 pb-2 mb-2">
+        <Wrench size={14} className="text-brand-accent" />
+        <h3 className="text-[10px] font-black text-white uppercase tracking-widest">Controle de Manutenção</h3>
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <Input label="Próxima Revisão Preventiva" type="date" icon={Calendar} name="nextPreventiveMaintenanceDate" defaultValue={initialData?.nextPreventiveMaintenanceDate} />
+        <Input label="Próxima Troca de Óleo (KM)" type="number" placeholder="60.000" icon={Hash} name="nextOilChangeKM" defaultValue={initialData?.nextOilChangeKM} />
+      </div>
     </div>
     
-    <div className="pt-8">
+    <div className="pt-4">
       <Button loading={loading}>
         <Save size={20} />
         {initialData ? 'Atualizar Ativo' : 'Registrar Veículo'}
@@ -204,20 +239,27 @@ export const EmployeeForm = ({ onSubmit, loading, initialData, currentUserRole, 
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
+  // Work Schedule State (Defaulting to 'Ana Paula' rule: 08-18h with 1h30 break, Sat 08-12h)
+  const [schedule, setSchedule] = useState<WorkSchedule>(initialData?.workSchedule || {
+    monToFri: {
+      morning: { start: '08:00', end: '11:30' },
+      afternoon: { start: '13:00', end: '18:00' }
+    },
+    saturday: { start: '08:00', end: '12:00' },
+    sunday: { start: '', end: '' }
+  });
+
   const isSpecialUser = currentUserRole === 'Dono / Proprietário' || currentUserEmail === 'elizeuferron@gmail.com';
 
   const ALL_TOOLS = [
     { id: 'dashboard', label: 'Dashboard' },
-    { id: 'journey', label: 'Jornada' },
     { id: 'fretamento', label: 'Fretamento' },
-    { id: 'fleet', label: 'Frota' },
-    { id: 'vencimentos', label: 'Vencimentos' },
+    { id: 'fleet', label: 'Gestão de Frotas' },
     { id: 'finance', label: 'Financeiro' },
     { id: 'fuel', label: 'Combustível' },
-    { id: 'maintenance', label: 'Manutenção' },
-    { id: 'staff', label: 'Equipe' },
     { id: 'trips', label: 'Viagens' },
-    { id: 'os', label: 'OS de Viagem' },
+    { id: 'staff', label: 'Equipe' },
+    { id: 'os', label: 'Ordens de Serviço' },
     { id: 'inventory', label: 'Almoxarifado' },
     { id: 'reports', label: 'Relatórios' },
   ];
@@ -236,6 +278,13 @@ export const EmployeeForm = ({ onSubmit, loading, initialData, currentUserRole, 
       const stream = await navigator.mediaDevices.getUserMedia({ video: true });
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
+        // Use a small delay to ensure the video element is ready for play()
+        // or just call play() and catch the error
+        videoRef.current.play().catch(err => {
+          if (err.name !== 'AbortError') {
+            console.error('Video play error:', err);
+          }
+        });
       }
     } catch (err) {
       console.error(err);
@@ -247,6 +296,7 @@ export const EmployeeForm = ({ onSubmit, loading, initialData, currentUserRole, 
     if (videoRef.current && videoRef.current.srcObject) {
       const stream = videoRef.current.srcObject as MediaStream;
       stream.getTracks().forEach(track => track.stop());
+      videoRef.current.srcObject = null;
     }
     setShowCamera(false);
   };
@@ -281,7 +331,12 @@ export const EmployeeForm = ({ onSubmit, loading, initialData, currentUserRole, 
       e.preventDefault();
       const formData = new FormData(e.currentTarget);
       const data = Object.fromEntries(formData.entries());
-      onSubmit({ ...data, photoUrl: photo, permissions: selectedPermissions });
+      onSubmit({ 
+        ...data, 
+        photoUrl: photo, 
+        permissions: selectedPermissions,
+        workSchedule: schedule
+      });
     }} className="space-y-6">
       <div className="space-y-6">
         <div className="flex flex-col items-center gap-4 py-4">
@@ -316,7 +371,7 @@ export const EmployeeForm = ({ onSubmit, loading, initialData, currentUserRole, 
                         }
                       }}
                     />
-                    <Save size={18} />
+                    <Upload size={18} />
                  </label>
               </div>
            </div>
@@ -328,7 +383,6 @@ export const EmployeeForm = ({ onSubmit, loading, initialData, currentUserRole, 
             <div className="bg-zinc-950 border border-zinc-800 rounded-3xl overflow-hidden max-w-md w-full relative">
               <video 
                 ref={videoRef} 
-                autoPlay 
                 playsInline 
                 className="w-full aspect-square object-cover bg-black"
               />
@@ -388,6 +442,94 @@ export const EmployeeForm = ({ onSubmit, loading, initialData, currentUserRole, 
           </div>
         </div>
 
+        {/* WORK SCHEDULE SECTION */}
+        <div className="p-6 bg-zinc-900/50 border border-zinc-800 rounded-3xl space-y-6">
+          <div className="flex items-center justify-between border-b border-zinc-800 pb-4">
+            <div className="flex items-center gap-3">
+              <Clock className="w-5 h-5 text-brand-accent" />
+              <h3 className="text-sm font-black text-white uppercase tracking-tight">Escala de Trabalho</h3>
+            </div>
+          </div>
+
+          <div className="space-y-6">
+            {/* Monday to Friday */}
+            <div className="space-y-4">
+              <span className="text-[10px] font-black text-brand-accent uppercase tracking-widest block bg-brand-accent/10 w-fit px-2 py-0.5 rounded">Segunda a Sexta</span>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="p-4 bg-zinc-950 border border-zinc-800 rounded-2xl space-y-3">
+                  <span className="text-[9px] font-black text-zinc-500 uppercase tracking-widest block font-mono">Período: Manhã</span>
+                  <div className="grid grid-cols-2 gap-3">
+                    <Input 
+                      label="Início" type="time" name="monToFri_morning_start" 
+                      value={schedule.monToFri.morning.start}
+                      onChange={(e: any) => setSchedule((prev: any) => ({ ...prev, monToFri: { ...prev.monToFri, morning: { ...prev.monToFri.morning, start: e.target.value } } }))}
+                    />
+                    <Input 
+                      label="Fim" type="time" name="monToFri_morning_end" 
+                      value={schedule.monToFri.morning.end}
+                      onChange={(e: any) => setSchedule((prev: any) => ({ ...prev, monToFri: { ...prev.monToFri, morning: { ...prev.monToFri.morning, end: e.target.value } } }))}
+                    />
+                  </div>
+                </div>
+                <div className="p-4 bg-zinc-950 border border-zinc-800 rounded-2xl space-y-3">
+                  <span className="text-[9px] font-black text-zinc-500 uppercase tracking-widest block font-mono">Período: Tarde</span>
+                  <div className="grid grid-cols-2 gap-3">
+                    <Input 
+                      label="Início" type="time" name="monToFri_afternoon_start" 
+                      value={schedule.monToFri.afternoon.start}
+                      onChange={(e: any) => setSchedule((prev: any) => ({ ...prev, monToFri: { ...prev.monToFri, afternoon: { ...prev.monToFri.afternoon, start: e.target.value } } }))}
+                    />
+                    <Input 
+                      label="Fim" type="time" name="monToFri_afternoon_end" 
+                      value={schedule.monToFri.afternoon.end}
+                      onChange={(e: any) => setSchedule((prev: any) => ({ ...prev, monToFri: { ...prev.monToFri, afternoon: { ...prev.monToFri.afternoon, end: e.target.value } } }))}
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Saturday & Sunday Row */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+              <div className="space-y-3">
+                <span className="text-[10px] font-black text-zinc-400 uppercase tracking-widest block bg-zinc-800 w-fit px-2 py-0.5 rounded">Sábado</span>
+                <div className="p-4 bg-zinc-950 border border-zinc-800 rounded-2xl">
+                  <div className="grid grid-cols-2 gap-3">
+                    <Input 
+                      label="Início" type="time" name="saturday_start" 
+                      value={schedule.saturday?.start}
+                      onChange={(e: any) => setSchedule((prev: any) => ({ ...prev, saturday: { start: e.target.value, end: prev.saturday?.end || '' } }))}
+                    />
+                    <Input 
+                      label="Fim" type="time" name="saturday_end" 
+                      value={schedule.saturday?.end}
+                      onChange={(e: any) => setSchedule((prev: any) => ({ ...prev, saturday: { start: prev.saturday?.start || '', end: e.target.value } }))}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                <span className="text-[10px] font-black text-zinc-400 uppercase tracking-widest block bg-zinc-800 w-fit px-2 py-0.5 rounded">Domingo</span>
+                <div className="p-4 bg-zinc-950 border border-zinc-800 rounded-2xl">
+                  <div className="grid grid-cols-2 gap-3">
+                    <Input 
+                      label="Início" type="time" name="sunday_start" 
+                      value={schedule.sunday?.start}
+                      onChange={(e: any) => setSchedule((prev: any) => ({ ...prev, sunday: { start: e.target.value, end: prev.sunday?.end || '' } }))}
+                    />
+                    <Input 
+                      label="Fim" type="time" name="sunday_end" 
+                      value={schedule.sunday?.end}
+                      onChange={(e: any) => setSchedule((prev: any) => ({ ...prev, sunday: { start: prev.sunday?.start || '', end: e.target.value } }))}
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           <Input label="E-mail (Opcional)" type="email" placeholder="joao@unimult.com.br" icon={Users} name="email" defaultValue={initialData?.email} />
           <Input label="Senha de Acesso (App)" type="password" placeholder="Defina uma senha" icon={Lock} name="password" defaultValue={initialData?.password} />
@@ -439,98 +581,5 @@ export const EmployeeForm = ({ onSubmit, loading, initialData, currentUserRole, 
   );
 };
 
-export const MaintenanceForm = ({ onSubmit, loading, vehicles }: any) => (
-  <form onSubmit={onSubmit} className="space-y-6">
-    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-      <Select 
-        label="Veículo" 
-        icon={Bus} 
-        name="vehicleId" 
-        required
-        options={(vehicles || []).map((v: any) => ({ value: v.id, label: `${v.plate} - ${v.model}` }))}
-      />
-      <Select 
-        label="Tipo de Manutenção" 
-        icon={Wrench} 
-        name="type" 
-        required
-        options={[
-          { value: 'preventive', label: 'Preventiva' },
-          { value: 'corrective', label: 'Corretiva' }
-        ]}
-      />
-    </div>
+// MaintenanceForm has been moved to its own file.
 
-    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-      <Select 
-        label="Serviço / Descrição" 
-        icon={Briefcase} 
-        name="description" 
-        required
-        options={[
-          { value: 'Troca de Óleo (Motor) e Filtros', label: 'Troca de Óleo (Motor) e Filtros' },
-          { value: 'Pneu Dianteiro Esquerdo (Troca/Rodízio)', label: 'Pneu Dianteiro Esquerdo (Troca/Rodízio)' },
-          { value: 'Pneu Dianteiro Direito (Troca/Rodízio)', label: 'Pneu Dianteiro Direito (Troca/Rodízio)' },
-          { value: 'Pneu Traseiro Esquerdo (Troca/Rodízio)', label: 'Pneu Traseiro Esquerdo (Troca/Rodízio)' },
-          { value: 'Pneu Traseiro Direito (Troca/Rodízio)', label: 'Pneu Traseiro Direito (Troca/Rodízio)' },
-          { value: 'Freios Dianteiros (Pastilhas/Discos/Lado Esq)', label: 'Freios Dianteiros (Pastilhas/Discos/Lado Esq)' },
-          { value: 'Freios Dianteiros (Pastilhas/Discos/Lado Dir)', label: 'Freios Dianteiros (Pastilhas/Discos/Lado Dir)' },
-          { value: 'Freios Traseiros (Sapatas/Tambores/Lado Esq)', label: 'Freios Traseiros (Sapatas/Tambores/Lado Esq)' },
-          { value: 'Freios Traseiros (Sapatas/Tambores/Lado Dir)', label: 'Freios Traseiros (Sapatas/Tambores/Lado Dir)' },
-          { value: 'Cubo e Rolamento (Dianteiro Esquerdo)', label: 'Cubo e Rolamento (Dianteiro Esquerdo)' },
-          { value: 'Cubo e Rolamento (Dianteiro Direito)', label: 'Cubo e Rolamento (Dianteiro Direito)' },
-          { value: 'Cubo e Rolamento (Traseiro Esquerdo)', label: 'Cubo e Rolamento (Traseiro Esquerdo)' },
-          { value: 'Cubo e Rolamento (Traseiro Direito)', label: 'Cubo e Rolamento (Traseiro Direito)' },
-          { value: 'Engraxamento Geral de Chassi', label: 'Engraxamento Geral de Chassi' },
-          { value: 'Suspensão (Amortecedores/Buchas/Pivôs)', label: 'Suspensão (Amortecedores/Buchas/Pivôs)' },
-          { value: 'Alinhamento e Balanceamento 3D', label: 'Alinhamento e Balanceamento 3D' },
-          { value: 'Ar Condicionado (Gás/Higienização/Filtros)', label: 'Ar Condicionado (Gás/Higienização/Filtros)' },
-          { value: 'Motor (Correias/Tensores/Vazamentos)', label: 'Motor (Correias/Tensores/Vazamentos)' },
-          { value: 'Sistema de Arrefecimento (Limpeza/Aditivo)', label: 'Sistema de Arrefecimento (Limpeza/Aditivo)' },
-          { value: 'Embreagem e Atuadores', label: 'Embreagem e Atuadores' },
-          { value: 'Injeção Eletrônica e Bicos', label: 'Injeção Eletrônica e Bicos' },
-          { value: 'Parte Elétrica e Baterias', label: 'Parte Elétrica e Baterias' },
-          { value: 'Tacógrafo (Aferição/Reparo)', label: 'Tacógrafo (Aferição/Reparo)' },
-          { value: 'Sistema Arla 32 (Filtros/Sensores)', label: 'Sistema Arla 32 (Filtros/Sensores)' },
-          { value: 'Itens de Salão / Acessibilidade', label: 'Itens de Salão / Acessibilidade' },
-          { value: 'Higienização e Lavagem Técnica', label: 'Higienização e Lavagem Técnica' },
-          { value: 'Outros', label: 'Outros (Especificar na Observação)' },
-        ]}
-      />
-      <Input label="Custo Total (R$)" type="number" step="0.01" placeholder="1500.00" icon={Hash} name="cost" />
-    </div>
-
-    <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pb-4 border-b border-zinc-800">
-      <Input label="Próxima Data (Prevista)" type="date" icon={Calendar} name="nextPreventiveMaintenanceDate" />
-      <Input label="Próximo KM (Previsto)" type="number" icon={Hash} name="nextMaintenanceKM" />
-    </div>
-
-    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-      <Input label="Data da Manutenção" type="date" icon={Calendar} required name="completedAt" />
-      <Input label="Odômetro na Manutenção (KM)" type="number" icon={Hash} required name="odometer" />
-    </div>
-
-    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-      <Select 
-        label="Status" 
-        icon={Hash} 
-        name="status"
-        defaultValue="completed"
-        options={[
-          { value: 'completed', label: 'Concluída' },
-          { value: 'pending', label: 'Pendente / Agendada' }
-        ]}
-      />
-      <div className="flex items-center justify-center p-4 bg-zinc-950/20 border border-zinc-800/50 rounded-xl">
-        <p className="text-[10px] text-zinc-500 font-bold uppercase tracking-widest text-center italic">A data e KM informados atualizarão o fichário do veículo.</p>
-      </div>
-    </div>
-
-    <div className="pt-4">
-      <Button loading={loading}>
-        <Save size={20} />
-        Registrar Manutenção
-      </Button>
-    </div>
-  </form>
-);

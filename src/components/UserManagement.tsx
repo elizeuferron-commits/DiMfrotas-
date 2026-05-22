@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion, AnimatePresence } from 'framer-motion';
 import { 
   Users, 
   UserPlus, 
@@ -14,8 +14,15 @@ import {
   Save,
   X,
   Loader2,
-  Lock
+  Lock,
+  Share2,
+  Download,
+  Monitor,
+  Smartphone as Phone,
+  ExternalLink,
+  QrCode
 } from 'lucide-react';
+import { ConfirmModal } from './UI';
 import { 
   collection, 
   onSnapshot, 
@@ -23,7 +30,8 @@ import {
   updateDoc, 
   setDoc,
   deleteDoc,
-  serverTimestamp 
+  serverTimestamp,
+  getDoc
 } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { UserProfile } from '../types';
@@ -36,6 +44,7 @@ export function UserManagement() {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedUser, setSelectedUser] = useState<UserProfile | null>(null);
   const [isAdding, setIsAdding] = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState({ isOpen: false, userId: '', displayName: '' });
 
   // New user form state
   const [newUserData, setNewUserData] = useState({
@@ -51,7 +60,8 @@ export function UserManagement() {
     'Administrativo',
     'Motorista',
     'Limpeza / Conservação',
-    'Visitante'
+    'Visitante',
+    'Aguardando Liberação'
   ];
 
   useEffect(() => {
@@ -81,12 +91,13 @@ export function UserManagement() {
     }
   };
 
-  const handleDeleteUser = async (userId: string) => {
-    if (!window.confirm('Tem certeza que deseja remover este usuário do sistema? Ele perderá acesso imediato.')) return;
+  const confirmDeleteUser = async () => {
     try {
-      await deleteDoc(doc(db, 'users', userId));
+      await deleteDoc(doc(db, 'users', deleteConfirm.userId));
       toast.success('Usuário removido com sucesso!');
+      setDeleteConfirm({ isOpen: false, userId: '', displayName: '' });
     } catch (error) {
+      console.error("Error deleting user:", error);
       toast.error('Erro ao remover usuário.');
     }
   };
@@ -114,9 +125,22 @@ export function UserManagement() {
     }
   };
 
+  const handleShareApp = () => {
+    const appUrl = window.location.origin;
+    const message = `Olá! Este é o link de acesso ao sistema DM Turismo Pro. \n\nPara instalar como Aplicativo no seu celular ou PC, abra o link e selecione "Instalar App" ou "Adicionar à Tela de Início": \n\n${appUrl}`;
+    const whatsappUrl = `https://wa.me/?text=${encodeURIComponent(message)}`;
+    window.open(whatsappUrl, '_blank');
+  };
+
+  const copyShareLink = () => {
+    const appUrl = window.location.origin;
+    navigator.clipboard.writeText(appUrl);
+    toast.success('Link de instalação copiado!');
+  };
+
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <h2 className="text-2xl font-black text-white uppercase tracking-tighter flex items-center gap-3">
             <ShieldCheck className="w-8 h-8 text-brand-accent" />
@@ -126,13 +150,81 @@ export function UserManagement() {
             Controle de permissões e credenciais DM Turismo
           </p>
         </div>
-        <button
-          onClick={() => setIsAdding(true)}
-          className="h-12 px-6 bg-brand-accent text-zinc-950 rounded-2xl font-black uppercase text-xs tracking-widest flex items-center gap-2 hover:bg-brand-accent/90 transition-all shadow-lg"
-        >
-          <UserPlus className="w-5 h-5" />
-          Novo Acesso
-        </button>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => setIsAdding(true)}
+            className="h-12 px-6 bg-brand-accent text-zinc-950 rounded-2xl font-black uppercase text-xs tracking-widest flex items-center gap-2 hover:bg-white transition-all shadow-lg active:scale-95"
+          >
+            <UserPlus className="w-5 h-5" />
+            Novo Acesso
+          </button>
+        </div>
+      </div>
+
+      {/* APP DISTRIBUTION CENTER */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 p-1 bg-gradient-to-br from-brand-accent/20 to-transparent rounded-[2.2rem]">
+        <div className="bg-zinc-900/90 backdrop-blur-sm border border-zinc-800 rounded-3xl p-8 space-y-6">
+          <div className="flex items-start justify-between">
+            <div className="space-y-1">
+              <span className="text-[10px] font-black text-brand-accent uppercase tracking-[0.3em] block mb-2">Instalador Inteligente</span>
+              <h3 className="text-xl font-black text-white uppercase tracking-tight">DM Turismo Pro (Windows/Mobile)</h3>
+              <p className="text-zinc-500 text-xs leading-relaxed max-w-sm">
+                O sistema é otimizado para funcionar como um Aplicativo nativo sem precisar de lojas. 
+                Compartilhe o link abaixo com sua equipe.
+              </p>
+            </div>
+            <div className="w-14 h-14 bg-zinc-800 rounded-2xl flex items-center justify-center text-brand-accent">
+              <QrCode className="w-8 h-8" />
+            </div>
+          </div>
+
+          <div className="flex flex-col sm:flex-row gap-3 pt-2">
+            <button 
+              onClick={handleShareApp}
+              className="flex-1 h-14 bg-[#25D366] text-white rounded-2xl font-black uppercase text-xs tracking-widest flex items-center justify-center gap-2 hover:opacity-90 transition-all shadow-xl shadow-green-500/10 active:scale-95"
+            >
+              <Share2 className="w-4 h-4" /> Enviar por WhatsApp
+            </button>
+            <button 
+              onClick={copyShareLink}
+              className="flex-1 h-14 bg-zinc-800 text-white rounded-2xl font-black uppercase text-xs tracking-widest flex items-center justify-center gap-2 hover:bg-zinc-700 transition-all active:scale-95"
+            >
+              <ExternalLink className="w-4 h-4" /> Copiar Link
+            </button>
+          </div>
+        </div>
+
+        <div className="bg-zinc-950/50 border border-zinc-800/50 rounded-3xl p-6 flex flex-col gap-4">
+          <h4 className="text-[10px] font-black text-zinc-500 uppercase tracking-widest flex items-center gap-2">
+            <Download className="w-3 h-3 text-brand-accent" /> Guia de Instalação Rápida
+          </h4>
+          
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 h-full">
+            <div className="bg-zinc-900 border border-zinc-800 p-5 rounded-2xl flex flex-col gap-3 group hover:border-brand-accent/50 transition-colors">
+              <div className="w-10 h-10 bg-zinc-800 rounded-xl flex items-center justify-center text-brand-accent group-hover:scale-110 transition-transform">
+                <Monitor className="w-5 h-5" />
+              </div>
+              <div>
+                <p className="text-xs font-black text-white uppercase mb-1">Computador (Windows)</p>
+                <p className="text-[10px] text-zinc-500 font-medium leading-normal">
+                  Abra no Vivaldi/Edge e clique no ícone <span className="text-brand-accent font-black">(+)</span> na barra de endereços para instalar.
+                </p>
+              </div>
+            </div>
+
+            <div className="bg-zinc-900 border border-zinc-800 p-5 rounded-2xl flex flex-col gap-3 group hover:border-brand-accent/50 transition-colors">
+              <div className="w-10 h-10 bg-zinc-800 rounded-xl flex items-center justify-center text-brand-accent group-hover:scale-110 transition-transform">
+                <Smartphone className="w-5 h-5" />
+              </div>
+              <div>
+                <p className="text-xs font-black text-white uppercase mb-1">Android (Celular)</p>
+                <p className="text-[10px] text-zinc-500 font-medium leading-normal">
+                  Abra no Chrome, clique nos <span className="text-brand-accent font-black">(3 pontos)</span> e escolha <span className="text-zinc-300 font-bold">"Instalar Aplicativo"</span>.
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -224,14 +316,13 @@ export function UserManagement() {
                           ))}
                         </select>
                       </td>
-                      <td className="p-4 text-right space-x-2">
-                        <button
-                          onClick={() => handleDeleteUser(user.uid)}
-                          disabled={user.role === 'Dono / Proprietário'}
-                          className="p-2.5 bg-zinc-800/50 text-zinc-600 rounded-xl hover:bg-rose-500/10 hover:text-rose-500 transition-all disabled:opacity-30 disabled:cursor-not-allowed"
-                          title="Excluir Acesso"
+                      <td className="p-4 text-right">
+                        <button 
+                          onClick={() => setDeleteConfirm({ isOpen: true, userId: user.uid, displayName: user.displayName || 'Usuário' })}
+                          className="p-2.5 bg-zinc-800 text-zinc-400 hover:text-rose-500 rounded-xl transition-all"
+                          title="Excluir Usuário"
                         >
-                          <Trash2 className="w-4 h-4" />
+                          <Trash2 size={18} />
                         </button>
                       </td>
                     </motion.tr>
@@ -318,6 +409,14 @@ export function UserManagement() {
           </div>
         )}
       </AnimatePresence>
+
+      <ConfirmModal 
+        isOpen={deleteConfirm.isOpen}
+        onClose={() => setDeleteConfirm({ ...deleteConfirm, isOpen: false })}
+        onConfirm={confirmDeleteUser}
+        title="Remover Acesso"
+        message={`Tem certeza que deseja remover o acesso de ${deleteConfirm.displayName}? Esta ação é definitiva.`}
+      />
     </div>
   );
 }

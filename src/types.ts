@@ -6,6 +6,7 @@ export type UserRole =
   | 'Motorista' 
   | 'Limpeza / Conservação' 
   | 'Visitante'
+  | 'Aguardando Liberação'
   | 'admin';
 
 export interface UserProfile {
@@ -27,12 +28,18 @@ export interface Vehicle {
   factoryYear: string;
   licenseExpiration: string;
   tourismLicenseExpiration: string;
+  cadasturExpiration?: string;
+  anttExpiration?: string;
+  detroArtespExpiration?: string;
+  municipalLicenseExpiration?: string;
+  tacografoExpiration?: string;
   insuranceExpiration: string;
   nextOilChangeKM?: number;
   nextPreventiveMaintenanceDate?: string;
   nextMaintenanceKM?: number;
   lastMaintenanceDate?: string;
   lastMaintenanceKM?: number;
+  photoUrl?: string;
   status: 'available' | 'maintenance' | 'trip';
   updatedAt: string;
 }
@@ -42,6 +49,8 @@ export interface FinancialTransaction {
   type: 'payable' | 'receivable';
   category: string;
   description: string;
+  supplier?: string;
+  barcode?: string;
   amount: number;
   dueDate: string;
   paymentDate?: string;
@@ -69,6 +78,21 @@ export interface Employee {
   admissionDate?: string;
   photoUrl?: string;
   permissions?: string[];
+  workSchedule?: WorkSchedule;
+}
+
+export interface WorkShift {
+  start: string; // HH:mm
+  end: string;   // HH:mm
+}
+
+export interface WorkSchedule {
+  monToFri: {
+    morning: WorkShift;
+    afternoon: WorkShift;
+  };
+  saturday?: WorkShift;
+  sunday?: WorkShift;
 }
 
 export interface FuelTank {
@@ -105,6 +129,23 @@ export interface MaintenanceLog {
   odometer?: number;
   scheduledDate: string;
   completedAt?: string;
+  nextMaintenanceKM?: number;
+  nextPreventiveMaintenanceDate?: string;
+  createdAt?: any;
+  attachments?: { name: string; url: string; type: 'image' | 'pdf' | 'word' | 'excel' }[];
+  checklist?: {
+    oilChanged: boolean;
+    filtersChanged: boolean;
+    frontPadsChanged: boolean;
+    rearPadsChanged: boolean;
+    frontDiscsChanged: boolean;
+    rearDiscsChanged: boolean;
+    airConditioning?: boolean;
+    tires?: boolean;
+    suspension?: boolean;
+    transmission?: boolean;
+    others?: string[];
+  };
 }
 
 export interface StockItem {
@@ -170,6 +211,8 @@ export interface Trip {
   attachments?: { name: string; url: string; type: 'image' | 'pdf' | 'word' | 'excel' }[];
   notes?: string;
   osNumber?: string;
+  type?: string;
+  createdAt?: any;
 }
 
 export interface Journey {
@@ -181,6 +224,8 @@ export interface Journey {
   endTime?: string;
   breaks: { start: string; end?: string }[];
   status: 'active' | 'on_break' | 'completed';
+  entryType?: 'normal' | 'vacation' | 'day_off' | 'overtime';
+  notes?: string;
   totalMinutes?: number;
   location?: { lat: number; lng: number };
 }

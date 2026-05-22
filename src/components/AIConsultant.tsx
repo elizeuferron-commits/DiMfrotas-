@@ -14,7 +14,7 @@ import {
   RefreshCw,
   Info
 } from 'lucide-react';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion, AnimatePresence } from 'framer-motion';
 import { Card } from './Cards';
 import { geminiService } from '../services/geminiService';
 import { cn } from '../lib/utils';

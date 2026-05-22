@@ -1,85 +1,106 @@
 import React from 'react';
 import { differenceInDays, parseISO, format } from 'date-fns';
-import { AlertTriangle, Calendar, ShieldCheck, Wrench, ChevronRight, Plus } from 'lucide-react';
+import { AlertTriangle, Calendar, ShieldCheck, Wrench, ChevronRight, Plus, Droplets } from 'lucide-react';
 import { Vehicle } from '../types';
 import { cn } from '../lib/utils';
 
 interface FleetAlertsProps {
   vehicles: Vehicle[];
   onVehicleClick: (vehicle: Vehicle) => void;
+  filter?: 'vencimentos' | 'maintenance';
 }
 
-export const FleetAlerts: React.FC<FleetAlertsProps> = ({ vehicles, onVehicleClick }) => {
+export const FleetAlerts: React.FC<FleetAlertsProps> = ({ vehicles, onVehicleClick, filter }) => {
   const alerts = (vehicles || []).flatMap(v => {
     const items = [];
     const today = new Date();
 
-    // 1. Licenciamento
-    if (v.licenseExpiration) {
-      const days = differenceInDays(parseISO(v.licenseExpiration), today);
-      if (days <= 30) {
-        items.push({
-          id: `${v.id}-lic`,
-          vehicle: v,
-          type: 'licensing',
-          label: 'Licenciamento',
-          date: v.licenseExpiration,
-          days,
-          priority: days <= 7 ? 'high' : 'medium'
-        });
-      }
+    const isVencimentos = !filter || filter === 'vencimentos';
+    const isMaintenance = !filter || filter === 'maintenance';
+
+    // 1. Licenciamentos e Autorizações de Turismo
+    if (isVencimentos) {
+      const docChecks = [
+        { key: 'licenseExpiration', label: 'Licenciamento (CRLV)', type: 'licensing' },
+        { key: 'tourismLicenseExpiration', label: 'Cert. Turismo', type: 'licensing' },
+        { key: 'cadasturExpiration', label: 'CADASTUR', type: 'licensing' },
+        { key: 'anttExpiration', label: 'ANTT Interestadual', type: 'licensing' },
+        { key: 'detroArtespExpiration', label: 'Estadual (DETRO/ARTESP)', type: 'licensing' },
+        { key: 'municipalLicenseExpiration', label: 'Licença Municipal', type: 'licensing' },
+        { key: 'tacografoExpiration', label: 'Cronotacógrafo', type: 'licensing' },
+        { key: 'insuranceExpiration', label: 'Seguro APP', type: 'insurance' },
+      ];
+
+      docChecks.forEach(check => {
+        const dateStr = (v as any)[check.key];
+        if (dateStr) {
+          const days = differenceInDays(parseISO(dateStr), today);
+          if (days <= 30) {
+            items.push({
+              id: `${v.id}-${check.key}`,
+              vehicle: v,
+              type: check.type,
+              label: check.label,
+              date: dateStr,
+              days,
+              priority: days <= 7 ? 'high' : 'medium'
+            });
+          }
+        }
+      });
     }
 
-    // 1.1 Turismo (ANTT/CADASTUR)
-    if (v.tourismLicenseExpiration) {
-      const days = differenceInDays(parseISO(v.tourismLicenseExpiration), today);
-      if (days <= 30) {
-        items.push({
-          id: `${v.id}-tour`,
-          vehicle: v,
-          type: 'licensing',
-          label: 'Cert. Turismo',
-          date: v.tourismLicenseExpiration,
-          days,
-          priority: days <= 7 ? 'high' : 'medium'
-        });
-      }
-    }
-
-    // 2. Seguro
-    if (v.insuranceExpiration) {
-      const days = differenceInDays(parseISO(v.insuranceExpiration), today);
-      if (days <= 30) {
-        items.push({
-          id: `${v.id}-ins`,
-          vehicle: v,
-          type: 'insurance',
-          label: 'Seguro',
-          date: v.insuranceExpiration,
-          days,
-          priority: days <= 7 ? 'high' : 'medium'
-        });
-      }
-    }
-
-    // 3. Manutenção Preventiva (Data)
-    if (v.nextPreventiveMaintenanceDate) {
+    // 3. Manutenção Preventiva (Data & KM)
+    if (isMaintenance && v.nextPreventiveMaintenanceDate) {
       const days = differenceInDays(parseISO(v.nextPreventiveMaintenanceDate), today);
-      if (days <= 15) {
+      if (days <= 30) {
         items.push({
-          id: `${v.id}-maint`,
+          id: `${v.id}-maint-date`,
           vehicle: v,
           type: 'maintenance',
-          label: 'Manutenção Prev.',
+          label: 'Manutenção Prev. (Data)',
           date: v.nextPreventiveMaintenanceDate,
           days,
-          priority: days <= 5 ? 'high' : 'medium'
+          priority: days <= 7 ? 'high' : 'medium'
+        });
+      }
+    }
+
+    if (isMaintenance && v.nextMaintenanceKM) {
+      const kmRemaining = v.nextMaintenanceKM - v.currentOdometer;
+      if (kmRemaining <= 3000) {
+        items.push({
+          id: `${v.id}-maint-km`,
+          vehicle: v,
+          type: 'maintenance',
+          label: 'Manutenção Prev. (KM)',
+          date: new Date().toISOString(), // Fallback
+          days: Math.floor(kmRemaining / 100), // Usado para ordenação aproximada
+          kmRemaining,
+          priority: kmRemaining <= 1500 ? 'high' : 'medium'
+        });
+      }
+    }
+
+    // 4. Troca de Óleo (KM)
+    if (isMaintenance && v.nextOilChangeKM) {
+      const kmRemaining = v.nextOilChangeKM - v.currentOdometer;
+      if (kmRemaining <= 2000) {
+        items.push({
+          id: `${v.id}-oil`,
+          vehicle: v,
+          type: 'oil',
+          label: 'Troca de Óleo',
+          date: new Date().toISOString(),
+          days: Math.floor(kmRemaining / 50), // Prioridade alta na ordenação
+          kmRemaining,
+          priority: kmRemaining <= 1000 ? 'high' : 'medium'
         });
       }
     }
 
     return items;
-  }).sort((a, b) => a.days - b.days);
+  }).sort((a, b) => (a.priority === 'high' ? -1 : 1) - (b.priority === 'high' ? -1 : 1) || a.days - b.days);
 
   if (alerts.length === 0) return null;
 
@@ -90,7 +111,7 @@ export const FleetAlerts: React.FC<FleetAlertsProps> = ({ vehicles, onVehicleCli
           <div className="p-1 bg-brand-accent/10 rounded-md">
             <AlertTriangle size={12} className="text-brand-accent animate-pulse" />
           </div>
-          Alertas de Manutenção & Vencimento
+          {filter === 'vencimentos' ? 'Alertas de Documentação' : filter === 'maintenance' ? 'Alertas de Manutenção' : 'Alertas de Manutenção & Vencimento'}
         </h2>
         <span className="text-[10px] font-black text-brand-accent shadow-[0_0_15px_rgba(251,191,36,0.3)] bg-brand-accent/10 px-3 py-1 rounded-full uppercase tracking-widest border border-brand-accent/20">
           {alerts.length} {alerts.length === 1 ? 'Alerta Ativo' : 'Alertas Ativos'}
@@ -122,6 +143,7 @@ export const FleetAlerts: React.FC<FleetAlertsProps> = ({ vehicles, onVehicleCli
                      {alert.type === 'licensing' && <Calendar size={20} className="stroke-[2.5]" />}
                      {alert.type === 'insurance' && <ShieldCheck size={20} className="stroke-[2.5]" />}
                      {alert.type === 'maintenance' && <Wrench size={20} className="stroke-[2.5]" />}
+                     {alert.type === 'oil' && <Droplets size={20} className="stroke-[2.5]" />}
                    </div>
                    <div>
                      <p className="text-[10px] font-black text-asphalt-700 uppercase tracking-widest leading-none">
@@ -137,13 +159,15 @@ export const FleetAlerts: React.FC<FleetAlertsProps> = ({ vehicles, onVehicleCli
                 <div className="flex flex-col gap-1.5">
                   <p className={cn(
                     "text-[10px] font-black uppercase tracking-tighter flex items-center gap-1.5",
-                    alert.days <= 0 ? "text-rose-500" : alert.priority === 'high' ? "text-rose-400" : "text-brand-accent"
+                    (alert.days !== undefined && alert.days <= 0) || (alert.kmRemaining !== undefined && alert.kmRemaining <= 100) ? "text-rose-500" : alert.priority === 'high' ? "text-rose-400" : "text-brand-accent"
                   )}>
-                    {alert.days < 0 
-                      ? "Prazo Vencido [" + Math.abs(alert.days) + "d]"
-                      : alert.days === 0 
-                        ? "Vencimento Hoje" 
-                        : "Vence em " + alert.days + " dias"}
+                    {alert.kmRemaining !== undefined 
+                      ? `${alert.kmRemaining.toLocaleString()} KM RESTANTES`
+                      : alert.days < 0 
+                        ? "Prazo Vencido [" + Math.abs(alert.days) + "d]"
+                        : alert.days === 0 
+                          ? "Vencimento Hoje" 
+                          : "Vence em " + alert.days + " dias"}
                   </p>
                   <div className="h-[2px] w-12 bg-asphalt-800 rounded-full overflow-hidden">
                     <div 
@@ -151,11 +175,17 @@ export const FleetAlerts: React.FC<FleetAlertsProps> = ({ vehicles, onVehicleCli
                         "h-full rounded-full transition-all duration-1000",
                         alert.priority === 'high' ? "bg-rose-500" : "bg-brand-accent"
                       )}
-                      style={{ width: `${Math.max(10, Math.min(100, (30 - alert.days) / 30 * 100))}%` }}
+                      style={{ 
+                        width: alert.kmRemaining !== undefined 
+                          ? `${Math.max(10, Math.min(100, (1 - alert.kmRemaining / (alert.type === 'oil' ? 1000 : 1500)) * 100))}%`
+                          : `${Math.max(10, Math.min(100, (1 - alert.days / 30) * 100))}%` 
+                      }}
                     />
                   </div>
                   <p className="text-[9px] font-bold text-asphalt-700 uppercase tracking-widest mt-1">
-                    Vence em: {format(parseISO(alert.date), 'dd/MM/yyyy')}
+                    {alert.kmRemaining !== undefined 
+                      ? `Estimativa: ${alert.vehicle.currentOdometer + alert.kmRemaining} KM`
+                      : `Vence em: ${format(parseISO(alert.date), 'dd/MM/yyyy')}`}
                   </p>
                 </div>
               </div>

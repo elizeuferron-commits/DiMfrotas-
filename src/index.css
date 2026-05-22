@@ -70,3 +70,85 @@
 .glow-brand { box-shadow: 0 0 30px rgba(255, 107, 0, 0.15); }
 .glow-sky { box-shadow: 0 0 30px rgba(14, 165, 233, 0.15); }
 
+/* Custon styling requested by user for low stock alerts */
+.InventoryManagement .stock-item-row.is-below-min svg,
+.InventoryManagement .stock-item-row.is-below-min .animate-pulse-soft {
+  animation: pulse-soft 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+@keyframes pulse-soft {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+    filter: drop-shadow(0 0 3px rgba(244, 63, 94, 0.4));
+  }
+  50% {
+    opacity: 0.65;
+    transform: scale(1.12);
+    filter: drop-shadow(0 0 8px rgba(244, 63, 94, 0.8));
+  }
+}
+
+/* Custom dynamic elegant scrollbar for sidebar-navigation: thin, transitions on hover, clean styling */
+.sidebar-navigation {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+  transition: scrollbar-color 0.3s ease;
+  scroll-behavior: smooth;
+  -webkit-overflow-scrolling: touch;
+  
+  /* Smooth mask-fade edge effect for scrolling lists */
+  mask-image: linear-gradient(to bottom, transparent 0%, rgba(0, 0, 0, 1) 4%, rgba(0, 0, 0, 1) 96%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, rgba(0, 0, 0, 1) 4%, rgba(0, 0, 0, 1) 96%, transparent 100%);
+}
+
+.sidebar-navigation::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+
+.sidebar-navigation::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.sidebar-navigation::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 9999px;
+  transition: background-color 0.3s ease, border-color 0.3s ease;
+}
+
+.sidebar-navigation:hover {
+  scrollbar-color: rgba(255, 107, 0, 0.35) transparent;
+}
+
+.sidebar-navigation:hover::-webkit-scrollbar-thumb {
+  background: rgba(255, 107, 0, 0.35); /* Elegant brand-accent thin bar on hover */
+}
+
+.sidebar-navigation::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 107, 0, 0.7); /* Highlights nicely when directly hovered */
+}
+
+/* Subtle pulse animation for active trip cards (highway-card) to give immediate visual feedback */
+.highway-card {
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.highway-card.is-active {
+  animation: border-pulse-brand 2s infinite ease-in-out;
+  border-width: 1px;
+}
+
+@keyframes border-pulse-brand {
+  0%, 100% {
+    border-color: rgba(255, 107, 0, 0.3);
+    box-shadow: 0 0 10px rgba(255, 107, 0, 0.08);
+  }
+  50% {
+    border-color: rgba(255, 107, 0, 1);
+    box-shadow: 0 0 22px rgba(255, 107, 0, 0.35);
+  }
+}
+
+
+

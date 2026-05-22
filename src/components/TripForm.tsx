@@ -9,7 +9,7 @@ import {
   Info,
   Clock,
   Navigation,
-  CheckSquare,
+  SquareCheck,
   Globe,
   Map,
   ShieldCheck,
@@ -631,7 +631,7 @@ export const TripForm = ({ vehicles, employees, initialData, initialAttachments,
         {/* Documentation Checklist */}
         <div className="md:col-span-2 space-y-4">
           <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest ml-1 flex items-center gap-2">
-            <CheckSquare size={14} className="text-brand-accent" />
+            <SquareCheck size={14} className="text-brand-accent" />
             Checklist de Documentação
           </label>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3 p-4 bg-zinc-950/50 rounded-2xl border border-zinc-800">
@@ -649,7 +649,7 @@ export const TripForm = ({ vehicles, employees, initialData, initialAttachments,
                   "w-5 h-5 rounded-md border flex items-center justify-center transition-all",
                   doc.checked ? "bg-emerald-500 border-emerald-500 text-zinc-950" : "border-zinc-700 text-transparent"
                 )}>
-                  <CheckSquare size={14} />
+                  <SquareCheck size={14} />
                 </div>
                 <span className="text-[10px] font-black uppercase tracking-tight">{doc.label}</span>
               </button>
@@ -1057,17 +1057,7 @@ export const TripForm = ({ vehicles, employees, initialData, initialAttachments,
         {onDelete && (
           <Button
             type="button"
-            onClick={() => {
-              setDeleteConfirm({
-                isOpen: true,
-                title: 'Excluir Viagem',
-                message: 'TEM CERTEZA QUE DESEJA EXCLUIR ESTA VIAGEM? TODOS OS DADOS E REGISTROS VINCULADOS SERÃO REMOVIDOS DEFINITIVAMENTE.',
-                onConfirm: () => {
-                  onDelete();
-                  setDeleteConfirm(prev => ({ ...prev, isOpen: false }));
-                }
-              });
-            }}
+            onClick={() => onDelete()}
             className="w-14 h-14 bg-rose-500/10 hover:bg-rose-500 text-rose-500 hover:text-white transition-all shadow-lg"
             title="Excluir Viagem"
           >

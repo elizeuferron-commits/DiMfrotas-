@@ -66,3 +66,26 @@ O sistema opera como um ecossistema de instalação única, preparado para todas
 - **Instalador APK Corporativo v2**: Versão aprimorada do instalador portátil (.html) com guia visual passo-a-passo para instalação como App nativo em Android e iOS.
 - **Gestão Financeira de Oficina**: Inclusão de custos reais e datas de conclusão no histórico de manutenção de veículos para análise de ROI.
 - **Ecossistema de Compartilhamento**: Módulo de compartilhamento universal para colaboradores via WhatsApp, simplificando a distribuição do ecossistema DM.
+
+## 🌑 Atualizações Recentes (19/05/2026) - v1.6.0 "Diamond Dashboard"
+- **Dashboard Pro (v1.6.0)**:
+    - **Interface de Alta Densidade**: Redesenho completo do painel principal focado em controle operacional total.
+    - **Alertas Prateados (FleetAlerts)**: Widget inteligente integrado que destaca veículos com documentação vencida ou manutenções atrasadas diretamente na Home.
+    - **Mural de Mídia Estabilizado**: Sistema robusto de compartilhamento de fotos e vídeos da operação, com suporte a links externos (Instagram/TikTok) e visualização em tela cheia.
+    - **Homenagem a Aniversariantes**: Banner festivo dinâmico com suporte a foto do colaborador e animações de celebração.
+    - **Feed de Notícias Administrativo**: Canal oficial de comunicação para notícias urgentes e informativos da frota.
+- **Sidebar Unificada**:
+    - **Consolidação de Módulos**: Agrupamento lógico de ferramentas para reduzir a carga cognitiva.
+    - **Controle de Acesso RBAC v2**: Restrição do Módulo de Ponto exclusivamente para o Proprietário (Elizeu Ferron) e colaboradores autorizados (Geber, Daniela).
+    - **Navegação Inteligente**: Resolução de permissões em tempo real para exibir apenas o que o usuário pode acessar.
+- **Módulo de Manutenção Especializada**:
+    - **Checklist Adaptativo**: Lista suspensa de manutenções com itens específicos para Vans (Portas, Estribos) e Ônibus (Ar Centrifugo, Sistemas a Ar, Banheiro).
+    - **Automação de Descrição**: Seleções inteligentes que concatenam itens técnicos na descrição da OS, economizando tempo de digitação.
+- **Integração v1.4.0-attachments**: Sincronização oficial do ecossistema de visualização de anexos (PDF, Office, Imagens) em todo o fluxo de viagens e oficina.
+- **Integração v1.2.0-finance**: Lançamento do Scanner Financeiro IA (OCR via Gemini) e suporte a Código de Barras no Contas a Pagar.
+
+## 🌑 Atualizações Recentes (19/05/2026) - v1.7.0 "Production Stable"
+- **Hotfix de Permissões (v1.6.1)**: Correção crítica nas regras de segurança do Firestore para permitir que administradores excluam rotas de fretamento e vídeos em destaque sem erros de permissão ou recursão.
+- **Estabilização de Mídia**: Otimização dos componentes `Dashboard` e `MediaHub` para evitar interrupções em pedidos de reprodução (`play()`) em navegadores modernos, garantindo fluidez no mural de mídias.
+- **Limpeza de Modo Sombra**: Remoção completa de marcas d'água e referências de desenvolvimento ".shadow", consolidando o sistema para uso em produção.
+- **Refinamento de Dashboard**: Limpeza visual e remoção de widgets redundantes para foco total nas métricas operacionais e alertas de frota.

@@ -1,8 +1,0 @@
-{
-  "appId": "com.dmfrotas.app",
-  "appName": "DM Turismo",
-  "webDir": "dist",
-  "server": {
-    "androidScheme": "https"
-  }
-}

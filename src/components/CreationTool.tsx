@@ -31,7 +31,7 @@ import {
   RefreshCw,
   X
 } from 'lucide-react';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion, AnimatePresence } from 'framer-motion';
 import { Card } from './Cards';
 import { backupService, BackupRecord } from '../services/backupService';
 import { auditService, AuditLog } from '../services/auditService';

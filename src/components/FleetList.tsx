@@ -1,10 +1,9 @@
 import React, { useState, memo } from 'react';
-import { Bus, Plus, Search, Wrench, Droplets, AlertTriangle, Users } from 'lucide-react';
+import { Bus, Plus, Search, Wrench, Droplets, AlertTriangle, Users, Camera } from 'lucide-react';
 import { Card } from './Cards';
 import { cn } from '../lib/utils';
 import { Vehicle } from '../types';
 import { format, parseISO, differenceInDays, isAfter, addDays } from 'date-fns';
-import { FleetAlerts } from './FleetAlerts';
 
 interface FleetListProps {
   vehicles: Vehicle[];
@@ -35,11 +34,6 @@ export const FleetList = memo(({ vehicles, onAddVehicle, onVehicleClick }: Fleet
           Novo Ativo
         </button>
       </div>
-
-      <FleetAlerts 
-        vehicles={vehicles} 
-        onVehicleClick={onVehicleClick} 
-      />
 
       <Card className="p-0 border-zinc-800 bg-zinc-900/20 overflow-hidden">
         <div className="p-10 bg-zinc-900/50 border-b border-zinc-800 flex gap-6">
@@ -72,8 +66,17 @@ export const FleetList = memo(({ vehicles, onAddVehicle, onVehicleClick }: Fleet
                 className="grid grid-cols-1 md:grid-cols-4 p-8 items-center hover:bg-zinc-800/30 transition-all group cursor-pointer relative gap-6 md:gap-0"
               >
                 <div className="flex items-center gap-6">
+                  {v.photoUrl ? (
+                    <div className="w-20 h-14 rounded-xl overflow-hidden border border-zinc-800 shrink-0 shadow-lg">
+                      <img src={v.photoUrl} alt={v.plate} className="w-full h-full object-cover" />
+                    </div>
+                  ) : (
+                    <div className="w-20 h-14 bg-zinc-900 border border-zinc-800 rounded-xl flex items-center justify-center shrink-0">
+                      <Camera size={18} className="text-zinc-700" />
+                    </div>
+                  )}
                   <div className={cn(
-                    "w-14 h-14 bg-zinc-800 rounded-xl flex items-center justify-center shadow-lg border transition-all",
+                    "w-14 h-14 bg-zinc-800 rounded-xl flex items-center justify-center shadow-lg border transition-all shrink-0",
                     (isOilChangeClose || isMaintenanceClose || isLicenseClose || isTourismClose) ? "border-amber-500/50 shadow-amber-900/20" : "border-zinc-700 group-hover:border-zinc-500"
                   )}>
                     {isMaintenanceClose ? (
