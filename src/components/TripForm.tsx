@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { PhotoGallery } from './PhotoGallery';
 import { 
   MapPin, 
   Calendar, 
@@ -18,6 +19,7 @@ import {
   ListChecks,
   Edit2,
   Check,
+  CheckCircle,
   Paperclip,
   Image as ImageIcon,
   FileText as FileIcon,
@@ -29,16 +31,227 @@ import {
   Copy,
   Sparkles,
   Loader2,
-  Eye
+  Eye,
+  Compass,
+  Hotel,
+  Utensils,
+  DollarSign,
+  Building2,
+  CreditCard,
+  Layers
 } from 'lucide-react';
+import { collection, getDocs, query, orderBy } from 'firebase/firestore';
+import { db } from '../lib/firebase';
 import { Button, ConfirmModal } from './UI';
 import { Vehicle, Employee, Trip, Passenger } from '../types';
 import { cn, getApiUrl } from '../lib/utils';
 import { toast } from 'sonner';
+import { APIProvider, useMapsLibrary } from '@vis.gl/react-google-maps';
+
+const API_KEY =
+  process.env.GOOGLE_MAPS_PLATFORM_KEY ||
+  (import.meta as any).env?.VITE_GOOGLE_MAPS_PLATFORM_KEY ||
+  (globalThis as any).GOOGLE_MAPS_PLATFORM_KEY ||
+  '';
+
+const hasValidKey = Boolean(API_KEY) && API_KEY !== 'YOUR_API_KEY' && API_KEY !== '';
+
+interface CalculatorProps {
+  origin: string;
+  destination: string;
+  stops: { location: string; arrivalTime: string }[];
+  onApplyNotes?: (routeInfo: string) => void;
+}
+
+function GeographicRouteCalculatorInner({ origin, destination, stops, onApplyNotes }: CalculatorProps) {
+  const routesLib = useMapsLibrary('routes');
+  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState<{
+    distanceText: string;
+    durationText: string;
+  } | null>(null);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!origin.trim() || !destination.trim()) {
+      setResult(null);
+      setErrorMsg(null);
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      setLoading(true);
+      setErrorMsg(null);
+
+      const google = (window as any).google;
+      if (!google || !google.maps) {
+        setLoading(false);
+        setErrorMsg('Erro: SDK do Google Maps não carregado.');
+        return;
+      }
+
+      try {
+        const directionsService = new google.maps.DirectionsService();
+        const waypoints = (stops || []).map(s => ({
+          location: s.location,
+          stopover: true
+        }));
+
+        directionsService.route({
+          origin: origin,
+          destination: destination,
+          waypoints: waypoints,
+          travelMode: google.maps.TravelMode.DRIVING
+        }, (res: any, status: any) => {
+          setLoading(false);
+          if (status === google.maps.DirectionsStatus.OK && res) {
+            const route = res.routes[0];
+            if (route) {
+              let distanceMeters = 0;
+              let durationSeconds = 0;
+              route.legs.forEach((leg: any) => {
+                distanceMeters += leg.distance?.value || 0;
+                durationSeconds += leg.duration?.value || 0;
+              });
+
+              const distanceKm = distanceMeters / 1000;
+              const distanceText = `${distanceKm.toFixed(1)} KM`;
+
+              const totalMinutes = Math.round(durationSeconds / 60);
+              const hrs = Math.floor(totalMinutes / 60);
+              const mins = totalMinutes % 60;
+              const durationText = hrs > 0 
+                ? `${hrs}h ${mins}min`
+                : `${mins}min`;
+
+              setResult({
+                distanceText,
+                durationText
+              });
+            } else {
+              setErrorMsg('Não foi possível traçar rota para este itinerário.');
+            }
+          } else {
+            console.error('Directions request failed due to ' + status);
+            setErrorMsg('Não foi possível traçar rota para este itinerário.');
+          }
+        });
+      } catch (err) {
+        setLoading(false);
+        console.error('Erro de roteamento Google Maps:', err);
+        setErrorMsg('Localidade não identificada ou sem resposta da API.');
+      }
+    }, 1000);
+
+    return () => clearTimeout(timer);
+  }, [origin, destination, stops]);
+
+  if (!origin.trim() || !destination.trim()) {
+    return (
+      <div className="bg-zinc-950/20 border border-zinc-800/40 rounded-2xl p-4 text-center">
+        <p className="text-[10px] text-zinc-650 font-black uppercase tracking-wider">
+          Insira origem e destino para calcular rota dinâmica e real por satélite
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="bg-zinc-950/40 border border-zinc-800 rounded-2xl p-4.5 space-y-3 relative overflow-hidden">
+      <div className="absolute top-0 right-0 w-32 h-32 bg-brand-accent/5 rounded-full blur-3xl pointer-events-none" />
+
+      <div className="flex items-center justify-between">
+        <span className="text-[10px] font-black uppercase tracking-widest text-zinc-400 flex items-center gap-1.5">
+          <Navigation size={12} className="text-brand-accent animate-pulse" />
+          Métrica Geográfica Real (Google Maps)
+        </span>
+        {loading && (
+          <span className="text-[8px] text-brand-accent font-black uppercase tracking-widest flex items-center gap-1">
+            <Loader2 size={10} className="animate-spin" />
+            Consolidando...
+          </span>
+        )}
+      </div>
+
+      {loading && !result ? (
+        <div className="py-2 flex items-center justify-center gap-2 text-zinc-550">
+          <Loader2 size={14} className="animate-spin text-brand-accent" />
+          <span className="text-[9px] font-bold uppercase tracking-wider">Consultando coordenadas e distâncias reais...</span>
+        </div>
+      ) : errorMsg ? (
+        <div className="p-3 bg-rose-500/5 border border-rose-500/15 rounded-xl flex items-center gap-2.5">
+          <span className="text-[9px] text-rose-450 font-bold uppercase">
+            ⚠️ {errorMsg}
+          </span>
+        </div>
+      ) : result ? (
+        <div className="space-y-3">
+          <div className="grid grid-cols-2 gap-3">
+            <div className="bg-zinc-900/60 p-3 rounded-xl border border-zinc-850/60 flex flex-col justify-between">
+              <span className="text-[8px] text-zinc-500 font-bold uppercase tracking-wider">Distância Oficial</span>
+              <span className="text-sm font-black text-brand-accent tabular-nums mt-1">
+                {result.distanceText}
+              </span>
+            </div>
+            <div className="bg-zinc-900/60 p-3 rounded-xl border border-zinc-850/60 flex flex-col justify-between">
+              <span className="text-[8px] text-zinc-500 font-bold uppercase tracking-wider">Tempo Estimado de Trajeto</span>
+              <span className="text-sm font-black text-white tabular-nums mt-1">
+                {result.durationText}
+              </span>
+            </div>
+          </div>
+
+          <div className="flex justify-end pt-1">
+            <button
+              type="button"
+              onClick={() => {
+                const info = `🗺️ Viagem calculada via Google Maps:\nDistância Real: ${result.distanceText}\nTempo Estimado: ${result.durationText}${stops.length > 0 ? `\nParadas Intermediárias: ${stops.length} ponto(s)` : ''}\n`;
+                if (onApplyNotes) {
+                  onApplyNotes(info);
+                }
+              }}
+              className="text-[9px] font-black bg-brand-accent/10 border border-brand-accent/20 hover:bg-brand-accent/20 text-brand-accent px-3 py-1.5 rounded-lg uppercase tracking-wider transition-all flex items-center gap-1.5 focus:outline-none"
+            >
+              <Compass size={12} />
+              Gravar em Observações
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="text-center py-2 text-zinc-650 text-[9px] font-bold uppercase">
+          Aguardando alteração nos endereços...
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function GeographicRouteCalculator(props: CalculatorProps) {
+  if (!hasValidKey) {
+    return (
+      <div className="bg-zinc-950/30 border border-zinc-850/50 rounded-2xl p-4 flex flex-col items-center justify-center text-center">
+        <Navigation size={20} className="text-zinc-650 mb-1.5" />
+        <span className="text-[9px] text-zinc-500 font-black uppercase tracking-widest">
+          Cálculos do Google Maps inativos
+        </span>
+        <p className="text-[8px] text-zinc-600 font-bold uppercase max-w-[280px] mt-1 leading-normal">
+          Defina GOOGLE_MAPS_PLATFORM_KEY nos Secrets para calcular distâncias exatas e durações automáticas em tempo real.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <APIProvider apiKey={API_KEY} version="weekly" language="pt-BR">
+      <GeographicRouteCalculatorInner {...props} />
+    </APIProvider>
+  );
+}
 
 interface TripFormProps {
   vehicles: Vehicle[];
   employees: Employee[];
+  trips?: Trip[];
   initialData?: Trip | null;
   initialAttachments?: { name: string; url: string; type: 'image' | 'pdf' | 'word' | 'excel' }[];
   onSubmit: (data: any) => void;
@@ -71,7 +284,76 @@ const DOCUMENTATION_TEMPLATES = {
   ]
 };
 
-export const TripForm = ({ vehicles, employees, initialData, initialAttachments, onSubmit, onCancel, onDelete, loading }: TripFormProps) => {
+const getFrequentRoutes = (tripsList: Trip[]) => {
+  if (!tripsList || tripsList.length === 0) return [];
+
+  const routeGroups: { [key: string]: { 
+    origin: string; 
+    destination: string; 
+    count: number; 
+    titles: { [title: string]: number };
+    tripTypes: { [type: string]: number };
+    stopsList: Array<{ stops: Trip['stops']; count: number }>;
+  } } = {};
+
+  tripsList.forEach(trip => {
+    const origin = (trip.origin || '').trim();
+    const destination = (trip.destination || '').trim();
+    if (!origin || !destination) return;
+
+    const key = `${origin.toUpperCase().replace(/\s+/g, ' ')}➔${destination.toUpperCase().replace(/\s+/g, ' ')}`;
+    if (!routeGroups[key]) {
+      routeGroups[key] = {
+        origin: origin,
+        destination: destination,
+        count: 0,
+        titles: {},
+        tripTypes: {},
+        stopsList: []
+      };
+    }
+
+    const group = routeGroups[key];
+    group.count += 1;
+
+    const tripTitle = (trip.title || '').trim();
+    if (tripTitle) {
+      group.titles[tripTitle] = (group.titles[tripTitle] || 0) + 1;
+    }
+
+    const tripType = trip.tripType || 'state';
+    group.tripTypes[tripType] = (group.tripTypes[tripType] || 0) + 1;
+
+    const stopsJson = JSON.stringify(trip.stops || []);
+    let stopsEntry = group.stopsList.find(s => JSON.stringify(s.stops) === stopsJson);
+    if (!stopsEntry) {
+      stopsEntry = { stops: trip.stops || [], count: 0 };
+      group.stopsList.push(stopsEntry);
+    }
+    stopsEntry.count += 1;
+  });
+
+  const suggestions = Object.values(routeGroups)
+    .map(g => {
+      const bestTitle = Object.entries(g.titles).sort((a, b) => b[1] - a[1])[0]?.[0] || `${g.origin.toUpperCase()} X ${g.destination.toUpperCase()}`;
+      const bestType = Object.entries(g.tripTypes).sort((a, b) => b[1] - a[1])[0]?.[0] as 'state' | 'interstate' | 'mercosur' || 'state';
+      const bestStops = g.stopsList.sort((a, b) => b.count - a.count)[0]?.stops || [];
+
+      return {
+        origin: g.origin,
+        destination: g.destination,
+        count: g.count,
+        title: bestTitle,
+        tripType: bestType,
+        stops: bestStops
+      };
+    })
+    .sort((a, b) => b.count - a.count);
+
+  return suggestions.slice(0, 5);
+};
+
+export const TripForm = ({ vehicles, employees, trips = [], initialData, initialAttachments, onSubmit, onCancel, onDelete, loading }: TripFormProps) => {
   const [formData, setFormData] = useState({
     title: initialData?.title || '',
     vehicleId: initialData?.vehicleId || '',
@@ -89,7 +371,50 @@ export const TripForm = ({ vehicles, employees, initialData, initialAttachments,
     attachments: (initialData?.attachments || initialAttachments || []) as { name: string; url: string; type: 'image' | 'pdf' | 'word' | 'excel' }[],
     notes: initialData?.notes || '',
     status: initialData?.status || 'scheduled' as const,
-    osNumber: initialData?.osNumber || `OS-${new Date().getFullYear()}${String(new Date().getMonth() + 1).padStart(2, '0')}${String(new Date().getDate()).padStart(2, '0')}-${Math.floor(1000 + Math.random() * 9000)}`
+    osNumber: initialData?.osNumber || `OS-${new Date().getFullYear()}${String(new Date().getMonth() + 1).padStart(2, '0')}${String(new Date().getDate()).padStart(2, '0')}-${Math.floor(1000 + Math.random() * 9000)}`,
+    accommodation: initialData?.accommodation || 'Por Conta',
+    meals: initialData?.meals || 'Por Conta',
+    tripValue: initialData?.tripValue !== undefined ? String(initialData.tripValue) : '',
+    client: initialData?.client || '',
+    paymentStatus: initialData?.paymentStatus || 'A Receber'
+  });
+
+  const [clients, setClients] = useState<{ id: string; name: string }[]>([]);
+  const [isCustomClient, setIsCustomClient] = useState(false);
+  const [customClientName, setCustomClientName] = useState('');
+
+  useEffect(() => {
+    const fetchClients = async () => {
+      try {
+        const q = query(collection(db, 'charter_clients'), orderBy('name', 'asc'));
+        const snapshot = await getDocs(q);
+        const list = snapshot.docs.map(doc => ({
+          id: doc.id,
+          name: doc.data().name || ''
+        }));
+        setClients(list);
+
+        if (initialData?.client) {
+          const exists = list.some(c => c.name.toLowerCase() === initialData.client?.toLowerCase());
+          if (!exists && initialData.client.trim() !== '') {
+            setIsCustomClient(true);
+            setCustomClientName(initialData.client);
+          }
+        }
+      } catch (error) {
+        console.warn('Erro ao carregar clientes no agendamento de viagens:', error);
+      }
+    };
+    fetchClients();
+  }, [initialData]);
+
+  const [isManualDriver, setIsManualDriver] = useState(() => {
+    if (!initialData?.driverId) return false;
+    return !(employees || []).some(e => e.id === initialData.driverId);
+  });
+  const [isManualSecondDriver, setIsManualSecondDriver] = useState(() => {
+    if (!initialData?.secondDriverId) return false;
+    return !(employees || []).some(e => e.id === initialData.secondDriverId);
   });
 
   const [newPassenger, setNewPassenger] = useState<Passenger>({ name: '', document: '' });
@@ -109,6 +434,11 @@ export const TripForm = ({ vehicles, employees, initialData, initialAttachments,
     title: '',
     message: ''
   });
+
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const suggestedRoutes = React.useMemo(() => {
+    return getFrequentRoutes(trips);
+  }, [trips]);
 
   const handleSmartExtractFromAttachment = async (attachment: { name: string, url: string, type: string }, index: number) => {
     setProcessingAttachmentIndex(index);
@@ -152,7 +482,7 @@ export const TripForm = ({ vehicles, employees, initialData, initialAttachments,
   };
 
   useEffect(() => {
-    if (!initialData) {
+    if (!initialData || !initialData.id) {
       const template = DOCUMENTATION_TEMPLATES[formData.tripType] || [];
       setFormData(prev => ({
         ...prev,
@@ -390,7 +720,10 @@ export const TripForm = ({ vehicles, employees, initialData, initialAttachments,
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    onSubmit(formData);
+    onSubmit({
+      ...formData,
+      tripValue: formData.tripValue ? Number(formData.tripValue) : undefined
+    });
   };
 
   return (
@@ -439,7 +772,69 @@ export const TripForm = ({ vehicles, employees, initialData, initialAttachments,
       </div>
 
       <form onSubmit={handleSubmit} className="space-y-8">
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        {/* Seletor de Tipo de Lançamento (Redesenhado) */}
+        <div className="bg-zinc-950 border border-zinc-900 p-6 rounded-[2rem] space-y-4 shadow-xl shadow-black/30">
+          <div className="flex items-center gap-2.5">
+            <Layers size={18} className="text-brand-accent" />
+            <h4 className="text-[10px] font-black text-white uppercase tracking-wider">Tipo de Lançamento da Operação</h4>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <button
+              type="button"
+              onClick={() => setFormData(prev => ({ ...prev, status: 'scheduled' }))}
+              className={cn(
+                "py-4 px-6 rounded-2xl font-black text-[10px] uppercase tracking-[0.15em] flex items-center justify-center gap-2 border.5 transition-all cursor-pointer select-none",
+                formData.status !== 'completed'
+                  ? "bg-brand-accent/15 text-brand-accent border-brand-accent/40 shadow-lg shadow-brand-accent/5 font-extrabold"
+                  : "bg-zinc-900 text-zinc-500 border-zinc-800 hover:bg-zinc-850 hover:text-zinc-400"
+              )}
+            >
+              <Calendar size={14} />
+              Agendar Viagem (Programada)
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                let nextEndDate = formData.endDate;
+                if (!formData.endDate) {
+                  const startD = new Date(formData.startDate);
+                  startD.setHours(startD.getHours() + 3);
+                  try {
+                    nextEndDate = startD.toISOString().slice(0, 16);
+                  } catch (e) {}
+                }
+                setFormData(prev => ({ ...prev, status: 'completed', endDate: nextEndDate }));
+              }}
+              className={cn(
+                "py-4 px-6 rounded-2xl font-black text-[10px] uppercase tracking-[0.15em] flex items-center justify-center gap-2 border.5 transition-all cursor-pointer select-none",
+                formData.status === 'completed'
+                  ? "bg-emerald-500/15 text-emerald-400 border-emerald-500/40 shadow-lg shadow-emerald-500/5 font-extrabold"
+                  : "bg-zinc-900 text-zinc-500 border-zinc-800 hover:bg-zinc-850 hover:text-zinc-400"
+              )}
+            >
+              <CheckCircle size={14} />
+              Viagem Realizada (Histórico)
+            </button>
+          </div>
+          <div className="p-4 bg-[#001233]/10 border border-[#001233]/30 rounded-2xl flex items-start gap-3">
+            <div className="w-8 h-8 rounded-xl bg-brand-accent/10 border border-brand-accent/20 flex items-center justify-center text-brand-accent shrink-0 mt-0.5">
+              <ShieldCheck size={16} />
+            </div>
+            <div>
+              <p className="text-[10px] font-black text-white uppercase tracking-wider">
+                Ordem de Serviço (O.S.) Sincronizada
+              </p>
+              <p className="text-[8.5px] text-zinc-400 font-bold uppercase tracking-wide leading-relaxed mt-1">
+                {formData.status === 'completed' 
+                  ? "Esta viagem será salva como REALIZADA. O sistema criará a O.S. de Viagem correspondente e gerará as transações financeiras de receitas e fechamentos automaticamente."
+                  : "Esta viagem será agendada como PROGRAMADA. O sistema gerará o número de O.S. e as fichas de serviço operacionais em tempo real para controle e emissão imediata."
+                }
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         {/* OS Number & Basic Info */}
         <div className="space-y-4">
           <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest ml-1">Número da O.S.</label>
@@ -448,7 +843,6 @@ export const TripForm = ({ vehicles, employees, initialData, initialAttachments,
               <Hash size={18} />
             </div>
             <input
-              required
               type="text"
               placeholder="EX: OS-2024001"
               className="w-full bg-zinc-900 border border-zinc-800 rounded-2xl py-4 pl-12 pr-4 text-white font-bold placeholder:text-zinc-700 focus:outline-none focus:border-brand-accent/50 focus:ring-1 focus:ring-brand-accent/20 transition-all uppercase"
@@ -473,6 +867,55 @@ export const TripForm = ({ vehicles, employees, initialData, initialAttachments,
               onChange={e => setFormData({ ...formData, title: e.target.value })}
             />
           </div>
+        </div>
+
+        {/* Cliente Selection */}
+        <div className="md:col-span-2 space-y-4">
+          <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest ml-1">Cliente / Fretante</label>
+          <div className="relative group">
+            <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-zinc-500 group-focus-within:text-brand-accent transition-colors">
+              <Building2 size={18} />
+            </div>
+            <select
+              className="w-full bg-zinc-900 border border-zinc-800 rounded-2xl py-4 pl-12 pr-4 text-white font-bold focus:outline-none focus:border-brand-accent/50 focus:ring-1 focus:ring-brand-accent/20 appearance-none transition-all uppercase cursor-pointer"
+              value={isCustomClient ? '__custom__' : (formData.client || '')}
+              onChange={e => {
+                const val = e.target.value;
+                if (val === '__custom__') {
+                  setIsCustomClient(true);
+                  setFormData(prev => ({ ...prev, client: customClientName }));
+                } else {
+                  setIsCustomClient(false);
+                  setFormData(prev => ({ ...prev, client: val }));
+                }
+              }}
+            >
+              <option value="">SELECIONE UM CLIENTE</option>
+              {clients.map(c => (
+                <option key={c.id} value={c.name}>{c.name.toUpperCase()}</option>
+              ))}
+              <option value="__custom__">OUTROS (ESPECIFICAR)</option>
+            </select>
+          </div>
+
+          {isCustomClient && (
+            <div className="relative group mt-3 animate-fade-in">
+              <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-zinc-500 group-focus-within:text-brand-accent transition-colors">
+                <Building2 size={18} />
+              </div>
+              <input
+                type="text"
+                placeholder="DIGITE O NOME DO CLIENTE OUTROS"
+                className="w-full bg-zinc-900 border border-zinc-800 rounded-2xl py-4 pl-12 pr-4 text-white font-bold placeholder:text-zinc-700 focus:outline-none focus:border-brand-accent/50 focus:ring-1 focus:ring-brand-accent/20 transition-all uppercase"
+                value={customClientName}
+                onChange={e => {
+                  const val = e.target.value;
+                  setCustomClientName(val);
+                  setFormData(prev => ({ ...prev, client: val }));
+                }}
+              />
+            </div>
+          )}
         </div>
 
         {/* Trip Type Selection */}
@@ -502,6 +945,104 @@ export const TripForm = ({ vehicles, employees, initialData, initialAttachments,
           </div>
         </div>
 
+        {/* Route Suggestions Trigger & Box */}
+        <div className="md:col-span-2 space-y-4 border-t border-zinc-850 pt-4">
+          <div className="flex items-center justify-between">
+            <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest ml-1 flex items-center gap-2">
+              <Compass size={14} className="text-brand-accent animate-pulse" />
+              Sugerir Roteiros Inteligentes
+            </label>
+            <button
+              type="button"
+              onClick={() => setShowSuggestions(!showSuggestions)}
+              className={cn(
+                "flex items-center gap-2 px-3.5 py-2 rounded-xl transition-all text-[10px] font-black uppercase tracking-wider border",
+                showSuggestions 
+                  ? "bg-brand-accent/20 border-brand-accent text-brand-accent shadow-lg"
+                  : "bg-zinc-900 border-zinc-800 text-zinc-400 hover:border-zinc-700 hover:text-white"
+              )}
+            >
+              <Compass size={14} className={cn("transition-transform duration-500", showSuggestions && "rotate-180")} />
+              {showSuggestions ? "Ocultar Sugestões" : "Sugestão de Rota"}
+            </button>
+          </div>
+
+          {showSuggestions && (
+            <div className="bg-zinc-950/65 border border-zinc-800/80 rounded-3xl p-5.5 space-y-4 animate-fadeIn shadow-2xl backdrop-blur-md">
+              <div className="flex items-center justify-between pb-2.5 border-b border-zinc-900">
+                <p className="text-[9px] text-zinc-500 font-black uppercase tracking-widest">
+                  Análise inteligente de {trips.length} viagens registradas no histórico
+                </p>
+                <div className="flex items-center gap-1.5 bg-zinc-900/80 rounded-lg py-0.5 px-2 border border-zinc-800/85">
+                  <span className="w-1.5 h-1.5 rounded-full bg-brand-accent animate-pulse"></span>
+                  <span className="text-[8px] text-zinc-400 font-bold uppercase tracking-widest">Padrões DM Turismo</span>
+                </div>
+              </div>
+
+              {suggestedRoutes.length === 0 ? (
+                <div className="text-center py-7 text-zinc-600 font-bold uppercase tracking-wider text-[10px] bg-zinc-900/10 rounded-2xl border border-dashed border-zinc-850">
+                  Nenhuma viagem registrada no histórico para gerar sugestões.
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 gap-2.5">
+                  {suggestedRoutes.map((route, idx) => (
+                    <button
+                      key={idx}
+                      type="button"
+                      onClick={() => {
+                        setFormData(prev => ({
+                          ...prev,
+                          origin: route.origin,
+                          destination: route.destination,
+                          title: route.title,
+                          tripType: route.tripType,
+                          stops: route.stops
+                        }));
+                        toast.success(`Rota auto-preenchida para ${route.destination}!`);
+                        setShowSuggestions(false);
+                      }}
+                      className="w-full text-left p-4 bg-zinc-905/50 border border-zinc-800/65 hover:border-brand-accent/40 hover:bg-zinc-900 rounded-2xl transition-all duration-300 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 group hover:shadow-lg hover:shadow-brand-accent/5 hover:-translate-y-0.5 active:scale-99 shadow-sm"
+                    >
+                      <div className="space-y-1.5">
+                        <div className="flex items-center gap-2.5 flex-wrap">
+                          <span className="text-xs font-black text-white group-hover:text-brand-accent transition-colors uppercase tracking-tight">
+                            {route.origin}
+                          </span>
+                          <span className="text-brand-accent/80 text-xs font-black animate-pulse">➔</span>
+                          <span className="text-xs font-black text-white group-hover:text-brand-accent transition-colors uppercase tracking-tight">
+                            {route.destination}
+                          </span>
+                        </div>
+                        <p className="text-[9px] text-zinc-500 font-bold uppercase tracking-wider">
+                          Título: <span className="text-zinc-300 font-black">{route.title}</span>
+                        </p>
+                        {route.stops && route.stops.length > 0 && (
+                          <div className="flex items-center gap-1.5 mt-1.5">
+                            <span className="px-2 py-0.5 bg-zinc-950 text-zinc-400 text-[8px] font-black uppercase tracking-widest rounded-md border border-zinc-850">
+                              {route.stops.length} parada(s)
+                            </span>
+                            <span className="text-[8px] text-zinc-500 font-bold uppercase tracking-wide truncate max-w-[250px]">
+                              ({route.stops.map(s => s.location).join(', ')})
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2.5 self-start sm:self-center">
+                        <span className="px-2.5 py-1 bg-brand-accent/10 border border-brand-accent/25 text-brand-accent text-[9px] font-black uppercase tracking-widest rounded-lg shadow-sm">
+                          {route.count}x usada
+                        </span>
+                        <span className="px-2.5 py-1 bg-zinc-850 border border-zinc-750 text-zinc-400 text-[8px] font-black uppercase tracking-widest rounded-lg shadow-sm">
+                          {route.tripType === 'state' ? 'Estadual' : route.tripType === 'interstate' ? 'Interestadual' : 'Mercosul'}
+                        </span>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
         {/* Origin & Destination */}
         <div className="space-y-4">
           <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest ml-1 text-emerald-500">Origem</label>
@@ -510,7 +1051,6 @@ export const TripForm = ({ vehicles, employees, initialData, initialAttachments,
               <MapPin size={18} />
             </div>
             <input
-              required
               type="text"
               placeholder="SAÍDA"
               className="w-full bg-zinc-900 border border-zinc-800 rounded-2xl py-4 pl-12 pr-4 text-white font-bold placeholder:text-zinc-700 focus:outline-none focus:border-brand-accent/50 transition-all uppercase"
@@ -527,7 +1067,6 @@ export const TripForm = ({ vehicles, employees, initialData, initialAttachments,
               <MapPin size={18} />
             </div>
             <input
-              required
               type="text"
               placeholder="CHEGADA"
               className="w-full bg-zinc-900 border border-zinc-800 rounded-2xl py-4 pl-12 pr-4 text-white font-bold placeholder:text-zinc-700 focus:outline-none focus:border-brand-accent/50 transition-all uppercase"
@@ -596,15 +1135,30 @@ export const TripForm = ({ vehicles, employees, initialData, initialAttachments,
           </div>
         </div>
 
+        {/* Geographic Route Calculator */}
+        <div className="md:col-span-2">
+          <GeographicRouteCalculator
+            origin={formData.origin}
+            destination={formData.destination}
+            stops={formData.stops}
+            onApplyNotes={(routeInfo) => {
+              setFormData(prev => ({
+                ...prev,
+                notes: prev.notes ? `${prev.notes}\n\n${routeInfo}` : routeInfo
+              }));
+              toast.success('Informações de trajeto adicionadas às notas da viagem!');
+            }}
+          />
+        </div>
+
         {/* Schedule */}
-        <div className="space-y-4">
+        <div className="space-y-4 font-sans">
           <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest ml-1">Partida</label>
           <div className="relative group">
             <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-zinc-500">
               <Calendar size={18} />
             </div>
             <input
-              required
               type="datetime-local"
               className="w-full bg-zinc-900 border border-zinc-800 rounded-2xl py-4 pl-12 pr-4 text-white font-bold focus:outline-none focus:border-brand-accent/50 transition-all"
               value={formData.startDate}
@@ -984,7 +1538,6 @@ export const TripForm = ({ vehicles, employees, initialData, initialAttachments,
               <Bus size={18} />
             </div>
             <select
-              required
               className="w-full bg-zinc-900 border border-zinc-800 rounded-2xl py-4 pl-12 pr-4 text-white font-bold focus:outline-none focus:border-brand-accent/50 appearance-none transition-all uppercase"
               value={formData.vehicleId}
               onChange={e => setFormData({ ...formData, vehicleId: e.target.value })}
@@ -998,40 +1551,159 @@ export const TripForm = ({ vehicles, employees, initialData, initialAttachments,
         </div>
 
         <div className="space-y-4">
-          <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest ml-1">Motorista Principal</label>
+          <div className="flex justify-between items-center">
+            <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest ml-1">Motorista Principal</label>
+            <button
+              type="button"
+              onClick={() => {
+                setIsManualDriver(!isManualDriver);
+                setFormData(prev => ({ ...prev, driverId: '' }));
+              }}
+              className="text-[9px] font-black text-brand-accent hover:underline uppercase tracking-wider cursor-pointer"
+            >
+              {isManualDriver ? 'Selecionar da Lista' : 'Digitar Manualmente'}
+            </button>
+          </div>
           <div className="relative group">
             <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-zinc-500">
               <User size={18} />
             </div>
-            <select
-              required
-              className="w-full bg-zinc-900 border border-zinc-800 rounded-2xl py-4 pl-12 pr-4 text-white font-bold focus:outline-none focus:border-brand-accent/50 appearance-none transition-all uppercase"
-              value={formData.driverId}
-              onChange={e => setFormData({ ...formData, driverId: e.target.value })}
+            {isManualDriver ? (
+              <input
+                type="text"
+                placeholder="NOME DO MOTORISTA PRINCIPAL"
+                className="w-full bg-zinc-900 border border-zinc-800 rounded-2xl py-4 pl-12 pr-4 text-white font-bold placeholder:text-zinc-700 focus:outline-none focus:border-brand-accent/50 transition-all uppercase"
+                value={formData.driverId}
+                onChange={e => setFormData({ ...formData, driverId: e.target.value.toUpperCase() })}
+              />
+            ) : (
+              <select
+                className="w-full bg-zinc-900 border border-zinc-800 rounded-2xl py-4 pl-12 pr-4 text-white font-bold focus:outline-none focus:border-brand-accent/50 appearance-none transition-all uppercase cursor-pointer"
+                value={formData.driverId}
+                onChange={e => setFormData({ ...formData, driverId: e.target.value })}
+              >
+                <option value="">SELECIONE O MOTORISTA</option>
+                {(employees || []).filter(e => e.role === 'Motorista').map(e => (
+                  <option key={e.id} value={e.id}>{e.name}</option>
+                ))}
+              </select>
+            )}
+          </div>
+        </div>
+
+        <div className="space-y-4">
+          <div className="flex justify-between items-center">
+            <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest ml-1 text-zinc-400 italic">Motorista Auxiliar (Opcional)</label>
+            <button
+              type="button"
+              onClick={() => {
+                setIsManualSecondDriver(!isManualSecondDriver);
+                setFormData(prev => ({ ...prev, secondDriverId: '' }));
+              }}
+              className="text-[9px] font-black text-brand-accent hover:underline uppercase tracking-wider cursor-pointer"
             >
-              <option value="">SELECIONE O MOTORISTA</option>
-              {(employees || []).filter(e => e.role === 'Motorista').map(e => (
-                <option key={e.id} value={e.id}>{e.name}</option>
-              ))}
+              {isManualSecondDriver ? 'Selecionar da Lista' : 'Digitar Manualmente'}
+            </button>
+          </div>
+          <div className="relative group">
+            <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-zinc-500">
+              <User size={18} />
+            </div>
+            {isManualSecondDriver ? (
+              <input
+                type="text"
+                placeholder="NOME DO MOTORISTA AUXILIAR"
+                className="w-full bg-zinc-900 border border-zinc-800 rounded-2xl py-4 pl-12 pr-4 text-white font-bold placeholder:text-zinc-700 focus:outline-none focus:border-brand-accent/50 transition-all uppercase"
+                value={formData.secondDriverId}
+                onChange={e => setFormData({ ...formData, secondDriverId: e.target.value.toUpperCase() })}
+              />
+            ) : (
+              <select
+                className="w-full bg-zinc-900 border border-zinc-800 rounded-2xl py-4 pl-12 pr-4 text-white font-bold focus:outline-none focus:border-brand-accent/50 appearance-none transition-all uppercase cursor-pointer"
+                value={formData.secondDriverId}
+                onChange={e => setFormData({ ...formData, secondDriverId: e.target.value })}
+              >
+                <option value="">NENHUM MOTORISTA AUXILIAR</option>
+                {(employees || []).filter(e => e.role === 'Motorista' && e.id !== formData.driverId).map(e => (
+                  <option key={e.id} value={e.id}>{e.name}</option>
+                ))}
+              </select>
+            )}
+          </div>
+        </div>
+
+        <div className="space-y-4">
+          <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest ml-1">Hospedagem</label>
+          <div className="relative group">
+            <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-zinc-500">
+              <Hotel size={18} />
+            </div>
+            <select
+              className="w-full bg-zinc-900 border border-zinc-800 rounded-2xl py-4 pl-12 pr-4 text-white font-bold focus:outline-none focus:border-brand-accent/50 appearance-none transition-all uppercase cursor-pointer"
+              value={formData.accommodation}
+              onChange={e => setFormData({ ...formData, accommodation: e.target.value })}
+            >
+              <option value="Por Conta">POR CONTA</option>
+              <option value="DM">DM</option>
+              <option value="AM">AM</option>
+              <option value="Cliente">CLIENTE</option>
+              <option value="Terceiros">TERCEIROS</option>
             </select>
           </div>
         </div>
 
         <div className="space-y-4">
-          <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest ml-1 text-zinc-400 italic">Motorista Auxiliar (Opcional)</label>
+          <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest ml-1">Alimentação</label>
           <div className="relative group">
             <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-zinc-500">
-              <User size={18} />
+              <Utensils size={18} />
             </div>
             <select
-              className="w-full bg-zinc-900 border border-zinc-800 rounded-2xl py-4 pl-12 pr-4 text-white font-bold focus:outline-none focus:border-brand-accent/50 appearance-none transition-all uppercase"
-              value={formData.secondDriverId}
-              onChange={e => setFormData({ ...formData, secondDriverId: e.target.value })}
+              className="w-full bg-zinc-900 border border-zinc-800 rounded-2xl py-4 pl-12 pr-4 text-white font-bold focus:outline-none focus:border-brand-accent/50 appearance-none transition-all uppercase cursor-pointer"
+              value={formData.meals}
+              onChange={e => setFormData({ ...formData, meals: e.target.value })}
             >
-              <option value="">NENHUM MOTORISTA AUXILIAR</option>
-              {(employees || []).filter(e => e.role === 'Motorista' && e.id !== formData.driverId).map(e => (
-                <option key={e.id} value={e.id}>{e.name}</option>
-              ))}
+              <option value="Por Conta">POR CONTA</option>
+              <option value="DM">DM</option>
+              <option value="AM">AM</option>
+              <option value="Cliente">CLIENTE</option>
+              <option value="Terceiros">TERCEIROS</option>
+            </select>
+          </div>
+        </div>
+
+        <div className="md:col-span-1 space-y-4">
+          <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest ml-1">Valor da Viagem (O.S.)</label>
+          <div className="relative group">
+            <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-zinc-500">
+              <DollarSign size={18} />
+            </div>
+            <input
+              type="number"
+              step="0.01"
+              min="0"
+              placeholder="R$ 0,00"
+              className="w-full bg-zinc-900 border border-zinc-800 rounded-2xl py-4 pl-12 pr-4 text-white font-bold placeholder:text-zinc-700 focus:outline-none focus:border-brand-accent/50 transition-all uppercase"
+              value={formData.tripValue}
+              onChange={e => setFormData({ ...formData, tripValue: e.target.value })}
+            />
+          </div>
+        </div>
+
+        <div className="md:col-span-1 space-y-4">
+          <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest ml-1">Status de Pagamento (Financeiro)</label>
+          <div className="relative group">
+            <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-zinc-500">
+              <CreditCard size={18} />
+            </div>
+            <select
+              className="w-full bg-zinc-900 border border-zinc-800 rounded-2xl py-4 pl-12 pr-4 text-white font-bold focus:outline-none focus:border-brand-accent/50 appearance-none transition-all uppercase cursor-pointer"
+              value={formData.paymentStatus}
+              onChange={e => setFormData({ ...formData, paymentStatus: e.target.value })}
+            >
+              <option value="A Receber">A RECEBER</option>
+              <option value="Faturado">FATURADO</option>
+              <option value="Pago">PAGO</option>
             </select>
           </div>
         </div>
@@ -1052,6 +1724,12 @@ export const TripForm = ({ vehicles, employees, initialData, initialAttachments,
           </div>
         </div>
       </div>
+
+      {initialData?.id && (
+        <div className="pt-6 mt-6 border-t border-white/5">
+          <PhotoGallery collectionName="trips" documentId={initialData.id} />
+        </div>
+      )}
 
       <div className="flex gap-4 pt-4 sticky bottom-0 bg-zinc-950 py-4 border-t border-zinc-900 z-10">
         {onDelete && (
@@ -1076,7 +1754,7 @@ export const TripForm = ({ vehicles, employees, initialData, initialAttachments,
           loading={loading}
           className="flex-[2] h-14 shadow-[0_0_20px_rgba(255,107,0,0.2)]"
         >
-          SALVAR VIAGEM NO SISTEMA
+          SALVAR
         </Button>
       </div>
 

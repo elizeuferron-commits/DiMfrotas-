@@ -23,7 +23,8 @@ import {
   Wrench,
   Brush,
   PenTool,
-  ShoppingBag
+  ShoppingBag,
+  Disc
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { cn } from '../lib/utils';
@@ -44,8 +45,6 @@ import {
 import { db } from '../lib/firebase';
 import { Input, Select, Textarea, Button, Modal, ConfirmModal } from './UI';
 import { StockItem } from '../types';
-import jsPDF from 'jspdf';
-import autoTable from 'jspdf-autotable';
 
 interface InventoryManagementProps {
   userRole?: string;
@@ -56,9 +55,38 @@ export const InventoryManagement: React.FC<InventoryManagementProps> = ({ userRo
   const [stockItems, setStockItems] = useState<StockItem[]>([]);
   const [transactions, setTransactions] = useState<any[]>([]);
   const [employees, setEmployees] = useState<any[]>([]);
+  const [vehicles, setVehicles] = useState<any[]>([]);
+  const [tireAlerts, setTireAlerts] = useState<any[]>([]);
+  const [tireDossiers, setTireDossiers] = useState<any[]>([]);
+
+  // Modals / states for tyre management
+  const [isAlertsHubOpen, setIsAlertsHubOpen] = useState<boolean>(false);
+  const [selectedTireForDossier, setSelectedTireForDossier] = useState<StockItem | null>(null);
+  const [isDossierModalOpen, setIsDossierModalOpen] = useState<boolean>(false);
+
+  // Tire alert creation form state
+  const [newAlertItemId, setNewAlertItemId] = useState<string>('');
+  const [newAlertType, setNewAlertType] = useState<string>('Nível Crítico');
+  const [newAlertThreshold, setNewAlertThreshold] = useState<string>('');
+  const [newAlertNotes, setNewAlertNotes] = useState<string>('');
+  const [loadingTireAlert, setLoadingTireAlert] = useState<boolean>(false);
+
+  // Tire dossier creation form state
+  const [dossierSerial, setDossierSerial] = useState<string>('');
+  const [dossierBrand, setDossierBrand] = useState<string>('MICHELIN');
+  const [dossierDot, setDossierDot] = useState<string>('');
+  const [dossierDepth, setDossierDepth] = useState<number>(10);
+  const [dossierVehicleId, setDossierVehicleId] = useState<string>('');
+  const [dossierPosition, setDossierPosition] = useState<string>('DIANTEIRO ESQUERDO');
+  const [dossierOdometer, setDossierOdometer] = useState<number>(0);
+  const [dossierStatus, setDossierStatus] = useState<string>('NOVO');
+  const [dossierAuditor, setDossierAuditor] = useState<string>('');
+  const [dossierNotes, setDossierNotes] = useState<string>('');
+  const [loadingDossier, setLoadingDossier] = useState<boolean>(false);
 
   // UI state
   const [inventoryFilter, setInventoryFilter] = useState<string>('TUDO');
+  const [selectedTireTab, setSelectedTireTab] = useState<'TODOS' | 'ÔNIBUS' | 'MICRO-ÔNIBUS' | 'VAN' | 'OUTROS'>('TODOS');
   const [searchTerm, setSearchTerm] = useState<string>('');
   
   // Modals state
@@ -66,7 +94,7 @@ export const InventoryManagement: React.FC<InventoryManagementProps> = ({ userRo
   const [isTxModalOpen, setIsTxModalOpen] = useState<boolean>(false);
   const [isDeleteTxConfirmOpen, setIsDeleteTxConfirmOpen] = useState<boolean>(false);
   const [selectedTxId, setSelectedTxId] = useState<string>('');
-  const [activeHistoryType, setActiveHistoryType] = useState<'TOTAL' | 'CRITICAL' | 'PEÇAS' | 'LIMPEZA' | 'ESCRITÓRIO' | null>(null);
+  const [activeHistoryType, setActiveHistoryType] = useState<'TOTAL' | 'CRITICAL' | 'PEÇAS' | 'PNEUS' | 'LIMPEZA' | 'ESCRITÓRIO' | null>(null);
   
   // Auto Purchase Order State
   const [isPurchaseModalOpen, setIsPurchaseModalOpen] = useState<boolean>(false);
@@ -84,6 +112,7 @@ export const InventoryManagement: React.FC<InventoryManagementProps> = ({ userRo
   // Form states - New Item
   const [newFieldName, setNewFieldName] = useState<string>('');
   const [newFieldCategory, setNewFieldCategory] = useState<string>('PEÇAS');
+  const [newFieldVehicleType, setNewFieldVehicleType] = useState<'ÔNIBUS' | 'MICRO-ÔNIBUS' | 'VAN' | 'OUTROS'>('ÔNIBUS');
   const [newFieldQuantity, setNewFieldQuantity] = useState<number>(0);
   const [newFieldUnit, setNewFieldUnit] = useState<string>('UN');
   const [newFieldMinQuantity, setNewFieldMinQuantity] = useState<number>(5);
@@ -119,10 +148,34 @@ export const InventoryManagement: React.FC<InventoryManagementProps> = ({ userRo
       console.error("Erro employees snapshot:", error);
     });
 
+    // 4. Vehicles (for dossier placement)
+    const unsubVehicles = onSnapshot(collection(db, 'vehicles'), (snapshot) => {
+      setVehicles(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
+    }, (error) => {
+      console.error("Erro vehicles snapshot:", error);
+    });
+
+    // 5. Tire Alerts
+    const unsubTireAlerts = onSnapshot(collection(db, 'tire_alerts'), (snapshot) => {
+      setTireAlerts(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
+    }, (error) => {
+      console.error("Erro tireAlerts snapshot:", error);
+    });
+
+    // 6. Tire Dossiers
+    const unsubTireDossiers = onSnapshot(collection(db, 'tire_dossiers'), (snapshot) => {
+      setTireDossiers(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
+    }, (error) => {
+      console.error("Erro tireDossiers snapshot:", error);
+    });
+
     return () => {
       unsubStock();
       unsubTransactions();
       unsubEmployees();
+      unsubVehicles();
+      unsubTireAlerts();
+      unsubTireDossiers();
     };
   }, []);
 
@@ -150,13 +203,17 @@ export const InventoryManagement: React.FC<InventoryManagementProps> = ({ userRo
     
     setLoadingItem(true);
     try {
-      const itemData = {
+      const itemData: any = {
         name: newFieldName.trim(),
         category: newFieldCategory.toUpperCase(),
         quantity: Number(newFieldQuantity) || 0,
         unit: newFieldUnit.trim().toUpperCase(),
         minQuantity: Number(newFieldMinQuantity) || 0
       };
+
+      if (newFieldCategory.toUpperCase() === 'PNEUS') {
+        itemData.vehicleType = newFieldVehicleType;
+      }
 
       await addDoc(collection(db, 'stock_items'), itemData);
       
@@ -189,6 +246,134 @@ export const InventoryManagement: React.FC<InventoryManagementProps> = ({ userRo
       toast.error("Erro ao cadastrar: " + (err.message || err));
     } finally {
       setLoadingItem(false);
+    }
+  };
+
+  // Handle tire alert creation
+  const handleCreateTireAlert = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newAlertItemId) {
+      toast.error("Por favor, selecione um pneu de referência.");
+      return;
+    }
+    if (!newAlertThreshold.trim()) {
+      toast.error("O valor de limite / aviso é obrigatório.");
+      return;
+    }
+
+    setLoadingTireAlert(true);
+    try {
+      const selectedItem = stockItems.find(i => i.id === newAlertItemId);
+      await addDoc(collection(db, 'tire_alerts'), {
+        itemId: newAlertItemId,
+        itemName: selectedItem?.name || 'PNEU',
+        alertType: newAlertType,
+        thresholdValue: newAlertThreshold.trim(),
+        status: 'ATIVO',
+        notes: newAlertNotes.trim(),
+        createdAt: new Date().toISOString()
+      });
+
+      toast.success("Alerta de pneu configurado!");
+      setNewAlertThreshold('');
+      setNewAlertNotes('');
+    } catch (err: any) {
+      console.error(err);
+      toast.error("Erro ao salvar alerta: " + (err.message || err));
+    } finally {
+      setLoadingTireAlert(false);
+    }
+  };
+
+  // Toggle Tire Alert status (mark as resolved / active)
+  const handleToggleTireAlert = async (alertId: string, currentStatus: string) => {
+    try {
+      const newStatus = currentStatus === 'ATIVO' ? 'RESOLVIDO' : 'ATIVO';
+      await updateDoc(doc(db, 'tire_alerts', alertId), {
+        status: newStatus
+      });
+      toast.success(newStatus === 'RESOLVIDO' ? "Alerta marcado como RESOLVIDO!" : "Alerta reativado!");
+    } catch (err: any) {
+      console.error(err);
+      toast.error("Erro ao alterar alerta: " + (err.message || err));
+    }
+  };
+
+  // Delete/Remove Tire Alert
+  const handleDeleteTireAlert = async (alertId: string) => {
+    try {
+      await deleteDoc(doc(db, 'tire_alerts', alertId));
+      toast.success("Alerta de pneu removido.");
+    } catch (err: any) {
+      console.error(err);
+      toast.error("Erro ao deletar alerta: " + (err.message || err));
+    }
+  };
+
+  // Handle tire dossier inspection register
+  const handleCreateDossier = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedTireForDossier) return;
+    if (!dossierSerial.trim()) {
+      toast.error("O número de série (Fogo/Série) é obrigatório.");
+      return;
+    }
+
+    setLoadingDossier(true);
+    try {
+      const selectedVehicle = vehicles.find(v => v.id === dossierVehicleId);
+      await addDoc(collection(db, 'tire_dossiers'), {
+        itemId: selectedTireForDossier.id,
+        serialNumber: dossierSerial.trim().toUpperCase(),
+        brandOption: dossierBrand,
+        dotCode: dossierDot.trim().toUpperCase() || 'N/D',
+        grooveDepth: Number(dossierDepth) || 0,
+        currentVehicleId: dossierVehicleId || 'ESTOQUE',
+        currentVehiclePlate: selectedVehicle?.plate || 'DISPONÍVEL NO ALMOXARIFADO',
+        wheelPosition: dossierPosition,
+        currentOdometer: Number(dossierOdometer) || 0,
+        status: dossierStatus,
+        auditorName: dossierAuditor.trim() || 'INSPETOR DM TURISMO',
+        notes: dossierNotes.trim(),
+        updatedAt: new Date().toISOString()
+      });
+
+      toast.success(`Dossiê do pneu série ${dossierSerial.toUpperCase()} criado!`);
+      // Reset form
+      setDossierSerial('');
+      setDossierDot('');
+      setDossierDepth(10);
+      setDossierVehicleId('');
+      setDossierOdometer(0);
+      setDossierNotes('');
+    } catch (err: any) {
+      console.error(err);
+      toast.error("Erro ao criar dossiê: " + (err.message || err));
+    } finally {
+      setLoadingDossier(false);
+    }
+  };
+
+  // Delete single dossier record
+  const handleDeleteDossier = async (dossierId: string) => {
+    try {
+      await deleteDoc(doc(db, 'tire_dossiers', dossierId));
+      toast.success("Registro de dossiê removido.");
+    } catch (err: any) {
+      console.error(err);
+      toast.error("Erro ao remover registro: " + (err.message || err));
+    }
+  };
+
+  // Delete Item from Inventory
+  const handleDeleteItem = async (itemId: string, itemName: string) => {
+    if (!window.confirm(`Tem certeza que deseja excluir o item ${itemName}? Esta ação é irreversível.`)) return;
+    try {
+      await deleteDoc(doc(db, 'stock_items', itemId));
+      toast.success(`Item ${itemName} removido com sucesso.`);
+    } catch (err: any) {
+      console.error(err);
+      toast.error("Erro ao deletar item: " + (err.message || err));
     }
   };
 
@@ -312,14 +497,47 @@ export const InventoryManagement: React.FC<InventoryManagementProps> = ({ userRo
 
   // Filtered List computations
   const filteredItems = useMemo(() => {
-    return stockItems.filter(item => {
-      const matchesCategory = inventoryFilter === 'TUDO' || item.category === inventoryFilter;
-      const matchesSearch = !searchTerm || 
-        item.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
-        item.category.toLowerCase().includes(searchTerm.toLowerCase());
-      return matchesCategory && matchesSearch;
-    });
+    return stockItems
+      .filter(item => {
+        const matchesCategory = inventoryFilter === 'TUDO' || item.category === inventoryFilter;
+        const matchesSearch = !searchTerm || 
+          item.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
+          item.category.toLowerCase().includes(searchTerm.toLowerCase());
+        return matchesCategory && matchesSearch;
+      })
+      .sort((a, b) => a.name.localeCompare(b.name));
   }, [stockItems, inventoryFilter, searchTerm]);
+
+  // Dynamic Classification of tires by vehicle types with fallback
+  const tiresByVehicleType = useMemo(() => {
+    const tires = stockItems.filter(item => {
+      const isTire = item.category === 'PNEUS';
+      const matchesSearch = !searchTerm || item.name.toLowerCase().includes(searchTerm.toLowerCase());
+      return isTire && matchesSearch;
+    });
+    return {
+      ONIBUS: tires.filter(t => t.vehicleType === 'ÔNIBUS' || (!t.vehicleType && t.name.toLowerCase().includes('ônibus') && !t.name.toLowerCase().includes('micro'))),
+      MICRO_ONIBUS: tires.filter(t => t.vehicleType === 'MICRO-ÔNIBUS' || (!t.vehicleType && t.name.toLowerCase().includes('micro'))),
+      VAN: tires.filter(t => t.vehicleType === 'VAN' || (!t.vehicleType && t.name.toLowerCase().includes('van'))),
+      OUTROS: tires.filter(t => t.vehicleType === 'OUTROS' || (!t.vehicleType && !t.name.toLowerCase().includes('van') && !t.name.toLowerCase().includes('ônibus') && !t.name.toLowerCase().includes('micro')))
+    };
+  }, [stockItems, searchTerm]);
+
+  // High-fidelity stats calculation for informative cards of tires
+  const tireStatsByVehicleType = useMemo(() => {
+    const calc = (list: StockItem[]) => {
+      const totalTypes = list.length;
+      const totalQuantity = list.reduce((acc, item) => acc + (item.quantity || 0), 0);
+      const criticalCount = list.filter(item => (item.quantity || 0) < (item.minQuantity || 0)).length;
+      return { totalTypes, totalQuantity, criticalCount };
+    };
+    return {
+      ONIBUS: calc(tiresByVehicleType.ONIBUS),
+      MICRO_ONIBUS: calc(tiresByVehicleType.MICRO_ONIBUS),
+      VAN: calc(tiresByVehicleType.VAN),
+      OUTROS: calc(tiresByVehicleType.OUTROS)
+    };
+  }, [tiresByVehicleType]);
 
   // Modal filtered items matching the active KPI history selection
   const modalFilteredItems = useMemo(() => {
@@ -330,8 +548,10 @@ export const InventoryManagement: React.FC<InventoryManagementProps> = ({ userRo
   }, [stockItems, activeHistoryType]);
 
   // Exporter of stock balance matching selected KPI Card
-  const handleExportStockToPDF = (type: 'TOTAL' | 'CRITICAL' | 'PEÇAS' | 'LIMPEZA' | 'ESCRITÓRIO') => {
+  const handleExportStockToPDF = async (type: 'TOTAL' | 'CRITICAL' | 'PEÇAS' | 'PNEUS' | 'LIMPEZA' | 'ESCRITÓRIO') => {
     try {
+      const jsPDF = (await import('jspdf')).default;
+      const autoTable = (await import('jspdf-autotable')).default;
       const doc = new jsPDF() as any;
       
       let itemsToPrint: StockItem[] = [];
@@ -345,6 +565,9 @@ export const InventoryManagement: React.FC<InventoryManagementProps> = ({ userRo
       } else if (type === 'PEÇAS') {
         itemsToPrint = stockItems.filter(i => i.category === 'PEÇAS');
         subtitle = 'CONTROLE DE ESTOQUE - SEÇÃO PEÇAS & MANUTENÇÃO';
+      } else if (type === 'PNEUS') {
+        itemsToPrint = stockItems.filter(i => i.category === 'PNEUS');
+        subtitle = 'CONTROLE DE ESTOQUE - SEÇÃO DE PNEUS DA FROTA';
       } else if (type === 'LIMPEZA') {
         itemsToPrint = stockItems.filter(i => i.category === 'LIMPEZA');
         subtitle = 'CONTROLE DE ESTOQUE - SEÇÃO PRODUTOS DE LIMPEZA';
@@ -357,14 +580,14 @@ export const InventoryManagement: React.FC<InventoryManagementProps> = ({ userRo
       doc.setFillColor(24, 24, 27);
       doc.rect(14, 14, 182, 30, 'F');
       
-      doc.setDrawColor(255, 107, 0);
+      doc.setDrawColor(26, 80, 241);
       doc.setLineWidth(0.5);
       doc.rect(14, 14, 182, 30, 'D');
       doc.line(74, 14, 74, 44);
       doc.line(144, 14, 144, 44);
 
       // logo
-      doc.setFillColor(255, 107, 0);
+      doc.setFillColor(26, 80, 241);
       doc.rect(18, 20, 10, 4, 'F');
       doc.rect(18, 26, 14, 4, 'F');
       doc.rect(18, 32, 7, 4, 'F');
@@ -375,11 +598,11 @@ export const InventoryManagement: React.FC<InventoryManagementProps> = ({ userRo
       doc.text('DM TURISMO', 36, 26);
       doc.setFontSize(6);
       doc.setTextColor(150, 150, 150);
-      doc.text('LOGÍSTICA & FRETAMENTOS', 36, 31);
+      doc.text('INTELIGÊNCIA & OPERAÇÕES', 36, 31);
 
       // detail box
       doc.setFont('helvetica', 'bold');
-      doc.setTextColor(255, 107, 0);
+      doc.setTextColor(26, 80, 241);
       doc.setFontSize(8);
       doc.text('ALMOXARIFADO CENTRAL', 78, 21);
       doc.setTextColor(255, 255, 255);
@@ -391,7 +614,7 @@ export const InventoryManagement: React.FC<InventoryManagementProps> = ({ userRo
 
       // dates box
       doc.setFont('helvetica', 'bold');
-      doc.setTextColor(255, 107, 0);
+      doc.setTextColor(26, 80, 241);
       doc.setFontSize(7.5);
       doc.text('CONTROLE DE ESTOQUES', 148, 21);
       doc.setTextColor(200, 200, 200);
@@ -427,7 +650,7 @@ export const InventoryManagement: React.FC<InventoryManagementProps> = ({ userRo
         alternateRowStyles: { fillColor: [245, 245, 245] }
       });
 
-      doc.save(`CONTROLE_ESTOQUE_DM_${type}_${format(new Date(), 'yyyyMMdd')}.pdf`);
+      doc.save(`CONTROLE_ESTOQUE_EF_${type}_${format(new Date(), 'yyyyMMdd')}.pdf`);
       toast.success('Relatório de estoque exportado com sucesso em PDF!');
     } catch (err: any) {
       console.error(err);
@@ -442,17 +665,20 @@ export const InventoryManagement: React.FC<InventoryManagementProps> = ({ userRo
     
     // Categorized quantities
     const pecasCount = stockItems.filter(i => i.category === 'PEÇAS').length;
+    const pneusCount = stockItems.filter(i => i.category === 'PNEUS').length;
     const limpezaCount = stockItems.filter(i => i.category === 'LIMPEZA').length;
     const escritorioCount = stockItems.filter(i => i.category === 'ESCRITÓRIO').length;
 
-    return { totalItems, criticalCount, pecasCount, limpezaCount, escritorioCount };
+    return { totalItems, criticalCount, pecasCount, pneusCount, limpezaCount, escritorioCount };
   }, [stockItems]);
 
   const selectOptionsItems = useMemo(() => {
-    return stockItems.map(item => ({
-      value: item.id,
-      label: `${item.name.toUpperCase()} (${item.quantity} ${item.unit} | ${item.category})`
-    }));
+    return stockItems
+      .map(item => ({
+        value: item.id,
+        label: `${item.name.toUpperCase()} (${item.quantity} ${item.unit} | ${item.category})`
+      }))
+      .sort((a, b) => a.label.localeCompare(b.label));
   }, [stockItems]);
 
   const selectOptionsEmployees = useMemo(() => {
@@ -492,7 +718,7 @@ export const InventoryManagement: React.FC<InventoryManagementProps> = ({ userRo
   };
 
   // Export Purchase Order PDF Sheet
-  const handleExportPurchaseOrderPDF = () => {
+  const handleExportPurchaseOrderPDF = async () => {
     const itemsToPrint = purchaseItems.filter(i => i.selected);
     if (itemsToPrint.length === 0) {
       toast.error("Selecione pelo menos um item para imprimir na ordem de compra.");
@@ -500,6 +726,8 @@ export const InventoryManagement: React.FC<InventoryManagementProps> = ({ userRo
     }
 
     try {
+      const jsPDF = (await import('jspdf')).default;
+      const autoTable = (await import('jspdf-autotable')).default;
       const doc = new jsPDF() as any;
       const subtitle = 'ORDEM DE COMPRA E REPOSIÇÃO COLETIVA';
       const orderNo = `OC-${format(new Date(), 'yyyyMMdd')}-${String(Math.floor(1000 + Math.random() * 9000))}`;
@@ -508,14 +736,14 @@ export const InventoryManagement: React.FC<InventoryManagementProps> = ({ userRo
       doc.setFillColor(24, 24, 27);
       doc.rect(14, 14, 182, 30, 'F');
       
-      doc.setDrawColor(255, 107, 0);
+      doc.setDrawColor(26, 80, 241);
       doc.setLineWidth(0.5);
       doc.rect(14, 14, 182, 30, 'D');
       doc.line(74, 14, 74, 44);
       doc.line(144, 14, 144, 44);
 
       // logo
-      doc.setFillColor(255, 107, 0);
+      doc.setFillColor(26, 80, 241);
       doc.rect(18, 20, 10, 4, 'F');
       doc.rect(18, 26, 14, 4, 'F');
       doc.rect(18, 32, 7, 4, 'F');
@@ -526,11 +754,11 @@ export const InventoryManagement: React.FC<InventoryManagementProps> = ({ userRo
       doc.text('DM TURISMO', 36, 26);
       doc.setFontSize(6);
       doc.setTextColor(150, 150, 150);
-      doc.text('LOGÍSTICA & FRETAMENTOS', 36, 31);
+      doc.text('INTELIGÊNCIA & OPERAÇÕES', 36, 31);
 
       // detail box
       doc.setFont('helvetica', 'bold');
-      doc.setTextColor(255, 107, 0);
+      doc.setTextColor(26, 80, 241);
       doc.setFontSize(8);
       doc.text('SUPRIMENTOS & COMPRAS', 78, 21);
       doc.setTextColor(255, 255, 255);
@@ -542,7 +770,7 @@ export const InventoryManagement: React.FC<InventoryManagementProps> = ({ userRo
 
       // dates box
       doc.setFont('helvetica', 'bold');
-      doc.setTextColor(255, 107, 0);
+      doc.setTextColor(26, 80, 241);
       doc.setFontSize(7.5);
       doc.text('PEDIDO DE REPOSIÇÃO', 148, 21);
       doc.setTextColor(200, 200, 200);
@@ -551,7 +779,7 @@ export const InventoryManagement: React.FC<InventoryManagementProps> = ({ userRo
       doc.text(`Emitido: ${format(new Date(), 'dd/MM/yyyy HH:mm')}`, 148, 27);
       doc.text(`${itemsToPrint.length} Itens Sob Demanda`, 148, 32);
       doc.setFont('helvetica', 'bold');
-      doc.setTextColor(255, 107, 0);
+      doc.setTextColor(26, 80, 241);
       doc.text('AUTO-REPOSIÇÃO SISTÊMICA', 148, 39);
 
       let curY = 56;
@@ -582,7 +810,7 @@ export const InventoryManagement: React.FC<InventoryManagementProps> = ({ userRo
       doc.setFontSize(7);
       doc.setFont('helvetica', 'bold');
       doc.setTextColor(40, 40, 40);
-      doc.text('SOLICITANTE - ALMOXARIFADO DM', 14, finalY + 5);
+      doc.text('SOLICITANTE - ALMOXARIFADO DM TURISMO', 14, finalY + 5);
 
       doc.line(110, finalY, 190, finalY);
       doc.text('DIRETORIA / AUTORIZAÇÃO DE COMPRA (ASSINATURA)', 110, finalY + 5);
@@ -606,7 +834,7 @@ export const InventoryManagement: React.FC<InventoryManagementProps> = ({ userRo
     setLoadingPurchase(true);
     try {
       const employeeSelected = employees.find(emp => emp.id === purchaseEmployeeId);
-      const employeeName = employeeSelected?.name || 'SISTEMA DE COMPRAS DM';
+      const employeeName = employeeSelected?.name || 'SISTEMA DE COMPRAS DM TURISMO';
 
       // Executa de forma transacional para cada item
       for (const item of itemsToOrder) {
@@ -646,6 +874,106 @@ export const InventoryManagement: React.FC<InventoryManagementProps> = ({ userRo
     }
   };
 
+  // Helper to render high-fidelity tyre cards in the exclusive split screen
+  const renderTireCard = (item: StockItem) => {
+    const isBelowMin = (item.quantity || 0) < (item.minQuantity || 0);
+    const itemTransactions = transactions
+      .filter(t => t.itemId === item.id)
+      .slice(0, 3); // Last 3 movements
+
+    return (
+      <div 
+        key={item.id} 
+        className={cn(
+          "stock-item-row group relative p-4 bg-zinc-950/45 hover:bg-zinc-950 hover:shadow-xl border rounded-2xl transition-all flex flex-col justify-between space-y-3",
+          isBelowMin ? "is-below-min border-rose-950/65 bg-rose-950/[0.02]" : "border-zinc-850 hover:border-zinc-700"
+        )}
+      >
+        <div className="flex items-start justify-between gap-2">
+          <div>
+            <h4 className="font-extrabold text-white uppercase text-[11px] leading-tight tracking-tight">{item.name}</h4>
+            <span className="inline-block mt-1.5 px-1.5 py-0.5 rounded text-[7px] font-black tracking-widest bg-zinc-900 border border-zinc-800 text-zinc-400">
+              {item.unit}
+            </span>
+          </div>
+
+          <div className="text-right shrink-0">
+            <p className="font-black text-white text-lg leading-none">{item.quantity}</p>
+            <span className="text-[7.5px] text-zinc-500 font-bold mt-1 block uppercase">QTD</span>
+          </div>
+        </div>
+
+        {/* Histórico Recente */}
+        {itemTransactions.length > 0 && (
+          <div className="pt-2 border-t border-zinc-900 space-y-1">
+            <p className="text-[7px] text-zinc-600 font-black uppercase">Últimas Movimentações:</p>
+            {itemTransactions.map((tx: any) => (
+              <div key={tx.id} className="flex justify-between items-center text-[7px] text-zinc-400">
+                <span className="truncate max-w-[60%]">{tx.type} ({tx.quantity})</span>
+                <span>{tx.timestamp ? format(parseISO(tx.timestamp), 'dd/MM HH:mm') : '-'}</span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className="pt-2.5 border-t border-zinc-900 flex items-center justify-between text-[8px] text-zinc-500 font-extrabold">
+          <span>MIN: {item.minQuantity}</span>
+          {isBelowMin ? (
+            <span className="flex items-center gap-0.5 text-rose-500 font-black tracking-wider text-[7.5px] uppercase">
+              • REPOSIÇÃO
+            </span>
+          ) : (
+            <span className="flex items-center gap-0.5 text-emerald-500 font-black tracking-wider text-[7.5px] uppercase">
+              • EM DIA
+            </span>
+          )}
+        </div>
+
+        <div className="pt-2 border-t border-zinc-900/50 flex items-center justify-between gap-2">
+          <button
+            type="button"
+            onClick={() => {
+              setSelectedTireForDossier(item);
+              setIsDossierModalOpen(true);
+            }}
+            className="w-full text-center py-1.5 bg-zinc-900 hover:bg-zinc-850 border border-zinc-800 hover:border-zinc-700 text-[8px] font-black tracking-widest text-zinc-300 uppercase rounded-xl transition-all cursor-pointer flex items-center justify-center gap-1 shadow-sm"
+          >
+            <FileText size={10} className="text-brand-accent scale-110" />
+            Dossiê Técnico ({tireDossiers.filter((d: any) => d.itemId === item.id).length})
+          </button>
+        </div>
+
+        {/* Operational Hover Actions */}
+        <div className="absolute right-2 top-2 opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1 bg-zinc-950/90 p-1 rounded-lg">
+          <button 
+            type="button"
+            onClick={() => {
+              setTxType('ENTRADA');
+              setSelectedItemForTx(item);
+              setIsTxModalOpen(true);
+            }}
+            title="Entrada / Abastecer" 
+            className="p-1 px-2 bg-emerald-950 border border-emerald-900 rounded text-emerald-400 hover:bg-emerald-900 hover:text-white transition-all cursor-pointer text-[9px] font-bold"
+          >
+            +
+          </button>
+          <button 
+            type="button"
+            onClick={() => {
+              setTxType('SAÍDA');
+              setSelectedItemForTx(item);
+              setIsTxModalOpen(true);
+            }}
+            title="Saída / Retirar" 
+            className="p-1 px-2 bg-rose-950 border border-rose-900 rounded text-rose-450 hover:bg-rose-900 hover:text-white transition-all cursor-pointer text-[9px] font-bold"
+          >
+            -
+          </button>
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="InventoryManagement space-y-8 animate-in fade-in duration-500 pb-20">
       
@@ -654,10 +982,10 @@ export const InventoryManagement: React.FC<InventoryManagementProps> = ({ userRo
         <div className="space-y-1">
           <h1 className="text-4xl font-black text-white uppercase tracking-tighter flex items-center gap-3">
             <Package size={32} className="text-brand-accent animate-pulse" />
-            Almoxarifado DM
+            Almoxarifado DM Turismo
           </h1>
           <p className="text-zinc-500 font-semibold uppercase text-xs tracking-wider">
-            Gestão Real de Peças Técnicas, Materiais de Limpeza e Materiais de Escritório.
+            Gestão Real de Peças Técnicas, Pneus, Materiais de Limpeza e Materiais de Escritório.
           </p>
         </div>
         
@@ -707,7 +1035,7 @@ export const InventoryManagement: React.FC<InventoryManagementProps> = ({ userRo
       </div>
 
       {/* OVERVIEW PANEL STATS */}
-      <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-4">
         {/* Total Items */}
         <div 
           onClick={() => setActiveHistoryType('TOTAL')}
@@ -761,6 +1089,22 @@ export const InventoryManagement: React.FC<InventoryManagementProps> = ({ userRo
           </div>
         </div>
 
+        {/* Pneus Count */}
+        <div 
+          onClick={() => setActiveHistoryType('PNEUS')}
+          className="bg-zinc-900 border border-zinc-800 p-5 rounded-2xl flex flex-col justify-between cursor-pointer hover:border-brand-accent hover:bg-zinc-850/80 active:scale-98 transition-all duration-300"
+          title="Ver estoque de pneus da frota"
+        >
+          <div className="flex items-center justify-between">
+            <span className="text-[8px] font-black text-brand-accent uppercase tracking-widest">Seção Pneus</span>
+            <Disc size={14} className="text-brand-accent animate-pulse" />
+          </div>
+          <div className="mt-4">
+            <h3 className="text-2xl font-black text-white">{kpis.pneusCount} Itens</h3>
+            <p className="text-[9px] text-zinc-400 font-extrabold uppercase mt-1">Controle de Rodagem</p>
+          </div>
+        </div>
+
         {/* Cleaning Count */}
         <div 
           onClick={() => setActiveHistoryType('LIMPEZA')}
@@ -789,7 +1133,7 @@ export const InventoryManagement: React.FC<InventoryManagementProps> = ({ userRo
           </div>
           <div className="mt-4">
             <h3 className="text-2xl font-black text-white">{kpis.escritorioCount} Itens</h3>
-            <p className="text-[9px] text-zinc-400 font-extrabold uppercase mt-1">Administração & Papelaria</p>
+            <p className="text-[9px] text-zinc-400 font-extrabold uppercase mt-1">Suprimentos Gerais</p>
           </div>
         </div>
       </div>
@@ -800,7 +1144,7 @@ export const InventoryManagement: React.FC<InventoryManagementProps> = ({ userRo
           
           {/* Tabs Filter */}
           <div className="flex flex-wrap bg-zinc-950 border border-zinc-800 p-1 rounded-2xl w-fit">
-            {['TUDO', 'PEÇAS', 'LIMPEZA', 'ESCRITÓRIO'].map((cat) => (
+            {['TUDO', 'PEÇAS', 'PNEUS', 'LIMPEZA', 'ESCRITÓRIO'].map((cat) => (
               <button
                 key={cat}
                 onClick={() => setInventoryFilter(cat)}
@@ -829,103 +1173,509 @@ export const InventoryManagement: React.FC<InventoryManagementProps> = ({ userRo
           </div>
         </div>
 
-        {/* COMPACT PRODUCT INVENTORY GRID */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {filteredItems.length > 0 ? (
-            filteredItems.map((item) => {
-              const isBelowMin = (item.quantity || 0) < (item.minQuantity || 0);
-              return (
-                <div 
-                  key={item.id} 
-                  className={cn(
-                    "stock-item-row group relative p-5 bg-zinc-950/40 hover:bg-zinc-950 hover:shadow-xl border rounded-2xl transition-all flex flex-col justify-between",
-                    isBelowMin ? "is-below-min border-rose-950/60 bg-rose-950/[0.02]" : "border-zinc-850 hover:border-zinc-750"
-                  )}
-                >
-                  <div className="flex items-start justify-between gap-4">
-                    <div className="flex items-center gap-4">
-                      {/* Visual Category Icon container */}
-                      <div className={cn(
-                        "w-11 h-11 rounded-xl flex items-center justify-center border",
-                        item.category === 'PEÇAS' ? "bg-blue-950/20 border-blue-900/40 text-blue-500" :
-                        item.category === 'LIMPEZA' ? "bg-emerald-950/20 border-emerald-900/40 text-emerald-500" :
-                        "bg-purple-950/20 border-purple-900/40 text-purple-500"
-                      )}>
-                        {item.category === 'PEÇAS' ? <Wrench size={18} /> : 
-                         item.category === 'LIMPEZA' ? <Brush size={18} /> : 
-                         <PenTool size={18} />}
-                      </div>
-                      
-                      <div>
-                        <h4 className="font-extrabold text-white uppercase text-xs tracking-tight">{item.name}</h4>
-                        <span className={cn(
-                          "inline-block px-2 py-0.5 rounded text-[7px] font-black tracking-widest mt-1 uppercase",
-                          item.category === 'PEÇAS' ? "bg-blue-950/50 text-blue-400 border border-blue-900/40" :
-                          item.category === 'LIMPEZA' ? "bg-emerald-950/50 text-emerald-400 border border-emerald-900/40" :
-                          "bg-purple-950/50 text-purple-400 border border-purple-900/40"
-                        )}>
-                          {item.category}
-                        </span>
-                      </div>
-                    </div>
-
-                    <div className="text-right">
-                      <p className="font-extrabold text-white text-xl leading-none">{item.quantity}</p>
-                      <span className="text-[8px] text-zinc-500 font-black mt-1 block uppercase">{item.unit}</span>
-                    </div>
+        {/* COMPACT PRODUCT INVENTORY GRID OR TYRE SPLIT SCREEN */}
+        {inventoryFilter === 'PNEUS' ? (
+          <div className="space-y-8 animate-in fade-in duration-300">
+            {/* CENTRAL DE ALERTAS DE PNEUS - REAL-TIME NOTIFICATIONS */}
+            <div className="p-5 bg-zinc-950 border border-zinc-850 rounded-2xl space-y-4">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                <div className="flex items-center gap-3">
+                  <div className="p-3 bg-brand-accent/10 border border-brand-accent/20 rounded-xl">
+                    <AlertTriangle className="text-brand-accent animate-pulse" size={20} />
                   </div>
-
-                  <div className="mt-5 pt-3 border-t border-zinc-900/80 flex items-center justify-between">
-                    <span className="text-[8px] font-black text-zinc-500 uppercase tracking-widest">
-                      Mín. Recomendável: <strong className="text-zinc-300">{item.minQuantity} {item.unit}</strong>
-                    </span>
-
-                    {isBelowMin ? (
-                      <span className="flex items-center gap-1.5 px-2.5 py-0.5 rounded-md bg-rose-950/40 text-rose-500 border border-rose-900/40 text-[7px] font-black tracking-widest uppercase">
-                        <AlertTriangle size={8} className="animate-pulse-soft text-rose-500 shrink-0" /> REPOSIÇÃO
-                      </span>
-                    ) : (
-                      <span className="flex items-center gap-1 px-2.5 py-0.5 rounded-md bg-emerald-950/30 text-emerald-500 border border-emerald-900/40 text-[7px] font-black tracking-widest uppercase">
-                        <Check size={8} /> DISPONÍVEL
-                      </span>
-                    )}
-                  </div>
-
-                  {/* Operational Hover Actions */}
-                  <div className="absolute right-3 top-3 opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1">
-                    <button 
-                      onClick={() => {
-                        setTxType('ENTRADA');
-                        setSelectedItemForTx(item);
-                        setIsTxModalOpen(true);
-                      }}
-                      title="Entrada" 
-                      className="p-1.5 bg-emerald-950/80 border border-emerald-900 rounded-lg text-emerald-400 hover:bg-emerald-900 hover:text-white transition-all cursor-pointer"
-                    >
-                      <ArrowUpRight size={12} />
-                    </button>
-                    <button 
-                      onClick={() => {
-                        setTxType('SAÍDA');
-                        setSelectedItemForTx(item);
-                        setIsTxModalOpen(true);
-                      }}
-                      title="Uso / Retirada" 
-                      className="p-1.5 bg-rose-950/80 border border-rose-900 rounded-lg text-rose-450 hover:bg-rose-900 hover:text-white transition-all cursor-pointer"
-                    >
-                      <ArrowDownLeft size={12} />
-                    </button>
+                  <div>
+                    <h4 className="text-sm font-extrabold text-white uppercase tracking-tight">Painel de Alertas de Rodagem</h4>
+                    <p className="text-zinc-500 text-[9px] font-bold uppercase mt-0.5">
+                      Controle ativo de calibração, vulcanização, sulcos e reteste de carcaças
+                    </p>
                   </div>
                 </div>
-              );
-            })
-          ) : (
-            <div className="col-span-full py-16 text-center">
-              <Package size={40} className="text-zinc-700 mx-auto mb-4" />
-              <p className="text-zinc-500 text-xs font-extrabold uppercase tracking-widest">Nenhum item localizado no almoxarifado</p>
+                
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      // Pre-fill active tire options
+                      const firstPneu = stockItems.find(i => i.category === 'PNEUS');
+                      if (firstPneu) setNewAlertItemId(firstPneu.id);
+                      setIsAlertsHubOpen(true);
+                    }}
+                    className="flex items-center gap-1.5 px-4 py-2 bg-zinc-900 border border-zinc-800 hover:border-zinc-750 text-white rounded-xl font-black uppercase text-[9px] tracking-widest cursor-pointer hover:bg-zinc-850 transition-all shadow"
+                  >
+                    <PlusCircle size={12} className="text-brand-accent" />
+                    Gerenciar Alertas ({tireAlerts.filter(a => a.status === 'ATIVO').length})
+                  </button>
+                </div>
+              </div>
+
+              {/* LIST OF ACTIVE ALERTS */}
+              {tireAlerts.filter(a => a.status === 'ATIVO').length > 0 ? (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
+                  {tireAlerts.filter(a => a.status === 'ATIVO').slice(0, 4).map((alert: any) => (
+                    <div 
+                      key={alert.id} 
+                      className="flex items-center justify-between p-3 bg-rose-950/15 border border-rose-900/40 rounded-xl"
+                    >
+                      <div className="space-y-1 max-w-[70%]">
+                        <div className="flex items-center gap-2">
+                          <span className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-ping animate-pulse-soft" />
+                          <p className="text-[10px] font-extrabold text-white uppercase truncate">{alert.itemName}</p>
+                        </div>
+                        <p className="text-[8px] text-zinc-400 font-bold uppercase">
+                          Motivo: <strong className="text-brand-accent">{alert.alertType}</strong> • Limite: <span className="font-mono text-zinc-300">{alert.thresholdValue}</span>
+                        </p>
+                        {alert.notes && (
+                          <p className="text-[8px] text-zinc-500 italic truncate font-bold uppercase mt-0.5">Obs: "{alert.notes}"</p>
+                        )}
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => handleToggleTireAlert(alert.id, 'ATIVO')}
+                        className="px-2.5 py-1 bg-rose-950 hover:bg-emerald-950 border border-rose-900 hover:border-emerald-900 text-rose-455 hover:text-emerald-400 font-black text-[7.5px] uppercase rounded-lg transition-all cursor-pointer"
+                      >
+                        ✓ Resolver
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="p-4 bg-zinc-900/30 border border-zinc-850 rounded-xl text-center">
+                  <p className="text-[9px] text-zinc-500 font-bold uppercase tracking-wider">
+                    ✓ Nenhum alerta de pneu crítico emitido na ferramenta. Todos os ativos encontram-se monitorados.
+                  </p>
+                </div>
+              )}
             </div>
-          )}
-        </div>
+
+            {/* CARDS INFORMATIVOS DE PNEUS (INFORMATIVE CARDS) - Interactive & Highly Polished */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+              
+              {/* Card Ônibus */}
+              <div 
+                onClick={() => setSelectedTireTab(selectedTireTab === 'ÔNIBUS' ? 'TODOS' : 'ÔNIBUS')}
+                className={cn(
+                  "p-5 rounded-2xl border transition-all duration-350 cursor-pointer flex flex-col justify-between space-y-4 shadow-sm",
+                  selectedTireTab === 'ÔNIBUS' 
+                    ? "bg-zinc-950 border-brand-accent ring-1 ring-brand-accent/40" 
+                    : "bg-zinc-950/40 border-zinc-900 hover:border-zinc-800 hover:bg-zinc-950/65"
+                )}
+              >
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="text-lg">🚌</span>
+                    <span className="text-[10px] font-black text-white uppercase tracking-widest">Ônibus</span>
+                  </div>
+                  <span className="text-[9px] bg-zinc-900 border border-zinc-850 px-2 py-0.5 rounded-full text-zinc-400 font-bold">
+                    {tireStatsByVehicleType.ONIBUS.totalTypes} {tireStatsByVehicleType.ONIBUS.totalTypes === 1 ? 'modelo' : 'modelos'}
+                  </span>
+                </div>
+                <div>
+                  <div className="text-xs text-zinc-500 font-bold uppercase tracking-wider">Estoque Total</div>
+                  <div className="text-2xl font-black text-white mt-1">
+                    {tireStatsByVehicleType.ONIBUS.totalQuantity} <span className="text-xs text-zinc-500 font-extrabold uppercase">Uni</span>
+                  </div>
+                </div>
+                <div className="pt-2 border-t border-zinc-905 flex items-center justify-between">
+                  {tireStatsByVehicleType.ONIBUS.criticalCount > 0 ? (
+                    <span className="text-[8px] font-black text-rose-500 uppercase tracking-widest flex items-center gap-1">
+                      ⚠️ {tireStatsByVehicleType.ONIBUS.criticalCount} EM REPOSIÇÃO
+                    </span>
+                  ) : (
+                    <span className="text-[8px] font-black text-emerald-500 uppercase tracking-widest flex items-center gap-1">
+                      ✓ ESTOQUE SEGURO
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {/* Card Micro-ônibus */}
+              <div 
+                onClick={() => setSelectedTireTab(selectedTireTab === 'MICRO-ÔNIBUS' ? 'TODOS' : 'MICRO-ÔNIBUS')}
+                className={cn(
+                  "p-5 rounded-2xl border transition-all duration-350 cursor-pointer flex flex-col justify-between space-y-4 shadow-sm",
+                  selectedTireTab === 'MICRO-ÔNIBUS' 
+                    ? "bg-zinc-950 border-brand-accent ring-1 ring-brand-accent/40" 
+                    : "bg-zinc-950/40 border-zinc-900 hover:border-zinc-800 hover:bg-zinc-950/65"
+                )}
+              >
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="text-lg">🚐</span>
+                    <span className="text-[10px] font-black text-white uppercase tracking-widest">Micro-ônibus</span>
+                  </div>
+                  <span className="text-[9px] bg-zinc-900 border border-zinc-850 px-2 py-0.5 rounded-full text-zinc-400 font-bold">
+                    {tireStatsByVehicleType.MICRO_ONIBUS.totalTypes} {tireStatsByVehicleType.MICRO_ONIBUS.totalTypes === 1 ? 'modelo' : 'modelos'}
+                  </span>
+                </div>
+                <div>
+                  <div className="text-xs text-zinc-500 font-bold uppercase tracking-wider">Estoque Total</div>
+                  <div className="text-2xl font-black text-white mt-1">
+                    {tireStatsByVehicleType.MICRO_ONIBUS.totalQuantity} <span className="text-xs text-zinc-500 font-extrabold uppercase">Uni</span>
+                  </div>
+                </div>
+                <div className="pt-2 border-t border-zinc-905 flex items-center justify-between">
+                  {tireStatsByVehicleType.MICRO_ONIBUS.criticalCount > 0 ? (
+                    <span className="text-[8px] font-black text-rose-500 uppercase tracking-widest flex items-center gap-1">
+                      ⚠️ {tireStatsByVehicleType.MICRO_ONIBUS.criticalCount} EM REPOSIÇÃO
+                    </span>
+                  ) : (
+                    <span className="text-[8px] font-black text-emerald-500 uppercase tracking-widest flex items-center gap-1">
+                      ✓ ESTOQUE SEGURO
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {/* Card Van */}
+              <div 
+                onClick={() => setSelectedTireTab(selectedTireTab === 'VAN' ? 'TODOS' : 'VAN')}
+                className={cn(
+                  "p-5 rounded-2xl border transition-all duration-350 cursor-pointer flex flex-col justify-between space-y-4 shadow-sm",
+                  selectedTireTab === 'VAN' 
+                    ? "bg-zinc-950 border-brand-accent ring-1 ring-brand-accent/40" 
+                    : "bg-zinc-950/40 border-zinc-900 hover:border-zinc-800 hover:bg-zinc-950/65"
+                )}
+              >
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="text-lg">🚗</span>
+                    <span className="text-[10px] font-black text-white uppercase tracking-widest">Van</span>
+                  </div>
+                  <span className="text-[9px] bg-zinc-900 border border-zinc-850 px-2 py-0.5 rounded-full text-zinc-400 font-bold">
+                    {tireStatsByVehicleType.VAN.totalTypes} {tireStatsByVehicleType.VAN.totalTypes === 1 ? 'modelo' : 'modelos'}
+                  </span>
+                </div>
+                <div>
+                  <div className="text-xs text-zinc-500 font-bold uppercase tracking-wider">Estoque Total</div>
+                  <div className="text-2xl font-black text-white mt-1">
+                    {tireStatsByVehicleType.VAN.totalQuantity} <span className="text-xs text-zinc-500 font-extrabold uppercase">Uni</span>
+                  </div>
+                </div>
+                <div className="pt-2 border-t border-zinc-905 flex items-center justify-between">
+                  {tireStatsByVehicleType.VAN.criticalCount > 0 ? (
+                    <span className="text-[8px] font-black text-rose-500 uppercase tracking-widest flex items-center gap-1">
+                      ⚠️ {tireStatsByVehicleType.VAN.criticalCount} EM REPOSIÇÃO
+                    </span>
+                  ) : (
+                    <span className="text-[8px] font-black text-emerald-500 uppercase tracking-widest flex items-center gap-1">
+                      ✓ ESTOQUE SEGURO
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {/* Card Outros */}
+              <div 
+                onClick={() => setSelectedTireTab(selectedTireTab === 'OUTROS' ? 'TODOS' : 'OUTROS')}
+                className={cn(
+                  "p-5 rounded-2xl border transition-all duration-350 cursor-pointer flex flex-col justify-between space-y-4 shadow-sm",
+                  selectedTireTab === 'OUTROS' 
+                    ? "bg-zinc-950 border-brand-accent ring-1 ring-brand-accent/40" 
+                    : "bg-zinc-950/40 border-zinc-900 hover:border-zinc-800 hover:bg-zinc-950/65"
+                )}
+              >
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="text-lg">⚙️</span>
+                    <span className="text-[10px] font-black text-white uppercase tracking-widest">Outros</span>
+                  </div>
+                  <span className="text-[9px] bg-zinc-900 border border-zinc-850 px-2 py-0.5 rounded-full text-zinc-400 font-bold">
+                    {tireStatsByVehicleType.OUTROS.totalTypes} {tireStatsByVehicleType.OUTROS.totalTypes === 1 ? 'modelo' : 'modelos'}
+                  </span>
+                </div>
+                <div>
+                  <div className="text-xs text-zinc-500 font-bold uppercase tracking-wider">Estoque Total</div>
+                  <div className="text-2xl font-black text-white mt-1">
+                    {tireStatsByVehicleType.OUTROS.totalQuantity} <span className="text-xs text-zinc-500 font-extrabold uppercase">Uni</span>
+                  </div>
+                </div>
+                <div className="pt-2 border-t border-zinc-905 flex items-center justify-between">
+                  {tireStatsByVehicleType.OUTROS.criticalCount > 0 ? (
+                    <span className="text-[8px] font-black text-rose-500 uppercase tracking-widest flex items-center gap-1">
+                      ⚠️ {tireStatsByVehicleType.OUTROS.criticalCount} EM REPOSIÇÃO
+                    </span>
+                  ) : (
+                    <span className="text-[8px] font-black text-emerald-500 uppercase tracking-widest flex items-center gap-1">
+                      ✓ ESTOQUE SEGURO
+                    </span>
+                  )}
+                </div>
+              </div>
+
+            </div>
+
+            {/* SELETOR DE ABAS DEDICADO DE VEÍCULOS */}
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 p-4 bg-zinc-950/40 border border-zinc-850 rounded-2xl">
+              <div className="flex flex-wrap bg-zinc-900 p-0.5 rounded-xl border border-zinc-800 relative">
+                {(['TODOS', 'ÔNIBUS', 'MICRO-ÔNIBUS', 'VAN', 'OUTROS'] as const).map((tireTab) => {
+                  const isActive = selectedTireTab === tireTab;
+                  return (
+                    <button
+                      key={tireTab}
+                      onClick={() => setSelectedTireTab(tireTab)}
+                      className={cn(
+                        "relative px-4 py-2 rounded-lg text-[9px] font-black uppercase tracking-widest cursor-pointer transition-colors duration-200 focus:outline-none",
+                        isActive ? "text-zinc-950 font-black z-10" : "text-zinc-450 hover:text-white"
+                      )}
+                    >
+                      {isActive && (
+                        <motion.div
+                          layoutId="activeTirePill"
+                          className="absolute inset-0 bg-brand-accent rounded-lg shadow-md -z-0"
+                          transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                        />
+                      )}
+                      <span className="relative z-10">
+                        {tireTab === 'TODOS' ? '🎛️ Visão Geral' : tireTab}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              <p className="text-[9px] text-zinc-500 font-black uppercase tracking-wider">
+                Visualizando: <strong className="text-brand-accent">{selectedTireTab === 'TODOS' ? 'FROTA COMPLETA (4 COLUNAS)' : selectedTireTab}</strong>
+              </p>
+            </div>
+
+            {/* MAIN PNEUS LIST VIEW GRID OR SPLIT-SCREEN */}
+            <AnimatePresence mode="wait">
+              <motion.div
+                key={selectedTireTab}
+                initial={{ opacity: 0, y: 12 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -12 }}
+                transition={{ duration: 0.2, ease: "easeInOut" }}
+              >
+                {selectedTireTab === 'TODOS' ? (
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6">
+                {/* Ônibus */}
+                <div className="bg-zinc-950/30 border border-zinc-850 p-5 rounded-2xl flex flex-col justify-between space-y-4">
+                  <div>
+                    <div className="flex items-center justify-between border-b border-zinc-900 pb-3">
+                      <h3 className="font-black text-xs text-zinc-100 uppercase tracking-widest flex items-center gap-2">
+                        <span className="text-sm">🚌</span> Ônibus
+                      </h3>
+                      <span className="text-[10px] bg-zinc-905 text-zinc-400 border border-zinc-850 px-2.5 py-0.5 rounded-full font-black">
+                        {tiresByVehicleType.ONIBUS.length}
+                      </span>
+                    </div>
+                    <div className="space-y-4 mt-4">
+                      {tiresByVehicleType.ONIBUS.length > 0 ? (
+                        tiresByVehicleType.ONIBUS.map(renderTireCard)
+                      ) : (
+                        <div className="py-20 text-center text-zinc-700 uppercase text-[9px] font-black tracking-wider">Nenhum Pneu</div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Micro-ônibus */}
+                <div className="bg-zinc-950/30 border border-zinc-850 p-5 rounded-2xl flex flex-col justify-between space-y-4">
+                  <div>
+                    <div className="flex items-center justify-between border-b border-zinc-900 pb-3">
+                      <h3 className="font-black text-xs text-zinc-100 uppercase tracking-widest flex items-center gap-2">
+                        <span className="text-sm">🚐</span> Micro-ônibus
+                      </h3>
+                      <span className="text-[10px] bg-zinc-905 text-zinc-400 border border-zinc-850 px-2.5 py-0.5 rounded-full font-black">
+                        {tiresByVehicleType.MICRO_ONIBUS.length}
+                      </span>
+                    </div>
+                    <div className="space-y-4 mt-4">
+                      {tiresByVehicleType.MICRO_ONIBUS.length > 0 ? (
+                        tiresByVehicleType.MICRO_ONIBUS.map(renderTireCard)
+                      ) : (
+                        <div className="py-20 text-center text-zinc-700 uppercase text-[9px] font-black tracking-wider">Nenhum Pneu</div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Van */}
+                <div className="bg-zinc-950/30 border border-zinc-850 p-5 rounded-2xl flex flex-col justify-between space-y-4">
+                  <div>
+                    <div className="flex items-center justify-between border-b border-zinc-900 pb-3">
+                      <h3 className="font-black text-xs text-zinc-100 uppercase tracking-widest flex items-center gap-2">
+                        <span className="text-sm">🚗</span> Van
+                      </h3>
+                      <span className="text-[10px] bg-zinc-905 text-zinc-400 border border-zinc-850 px-2.5 py-0.5 rounded-full font-black">
+                        {tiresByVehicleType.VAN.length}
+                      </span>
+                    </div>
+                    <div className="space-y-4 mt-4">
+                      {tiresByVehicleType.VAN.length > 0 ? (
+                        tiresByVehicleType.VAN.map(renderTireCard)
+                      ) : (
+                        <div className="py-20 text-center text-zinc-700 uppercase text-[9px] font-black tracking-wider">Nenhum Pneu</div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Outros */}
+                <div className="bg-zinc-950/30 border border-zinc-850 p-5 rounded-2xl flex flex-col justify-between space-y-4">
+                  <div>
+                    <div className="flex items-center justify-between border-b border-zinc-900 pb-3">
+                      <h3 className="font-black text-xs text-zinc-100 uppercase tracking-widest flex items-center gap-2">
+                        <span className="text-sm">⚙️</span> Outros
+                      </h3>
+                      <span className="text-[10px] bg-zinc-905 text-zinc-400 border border-zinc-850 px-2.5 py-0.5 rounded-full font-black">
+                        {tiresByVehicleType.OUTROS.length}
+                      </span>
+                    </div>
+                    <div className="space-y-4 mt-4">
+                      {tiresByVehicleType.OUTROS.length > 0 ? (
+                        tiresByVehicleType.OUTROS.map(renderTireCard)
+                      ) : (
+                        <div className="py-20 text-center text-zinc-700 uppercase text-[9px] font-black tracking-wider">Nenhum Pneu</div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="bg-zinc-950/20 border border-zinc-900 p-6 rounded-3xl animate-in fade-in duration-300">
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-6">
+                  {selectedTireTab === 'ÔNIBUS' && (
+                    tiresByVehicleType.ONIBUS.length > 0 ? (
+                      tiresByVehicleType.ONIBUS.map(renderTireCard)
+                    ) : (
+                      <div className="col-span-full py-16 text-center text-zinc-600 uppercase text-[10px] font-extrabold tracking-widest">Nenhum Pneu cadastrado para Ônibus</div>
+                    )
+                  )}
+                  {selectedTireTab === 'MICRO-ÔNIBUS' && (
+                    tiresByVehicleType.MICRO_ONIBUS.length > 0 ? (
+                      tiresByVehicleType.MICRO_ONIBUS.map(renderTireCard)
+                    ) : (
+                      <div className="col-span-full py-16 text-center text-zinc-600 uppercase text-[10px] font-extrabold tracking-widest">Nenhum Pneu cadastrado para Micro-ônibus</div>
+                    )
+                  )}
+                  {selectedTireTab === 'VAN' && (
+                    tiresByVehicleType.VAN.length > 0 ? (
+                      tiresByVehicleType.VAN.map(renderTireCard)
+                    ) : (
+                      <div className="col-span-full py-16 text-center text-zinc-600 uppercase text-[10px] font-extrabold tracking-widest">Nenhum Pneu cadastrado para Van</div>
+                    )
+                  )}
+                  {selectedTireTab === 'OUTROS' && (
+                    tiresByVehicleType.OUTROS.length > 0 ? (
+                      tiresByVehicleType.OUTROS.map(renderTireCard)
+                    ) : (
+                      <div className="col-span-full py-16 text-center text-zinc-600 uppercase text-[10px] font-extrabold tracking-widest">Nenhum Pneu cadastrado para esta categoria</div>
+                    )
+                  )}
+                </div>
+              </div>
+            )}
+              </motion.div>
+            </AnimatePresence>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {filteredItems.length > 0 ? (
+              filteredItems.map((item) => {
+                const isBelowMin = (item.quantity || 0) < (item.minQuantity || 0);
+                return (
+                  <div 
+                    key={item.id} 
+                    className={cn(
+                      "stock-item-row group relative p-5 bg-zinc-950/40 hover:bg-zinc-950 hover:shadow-xl border rounded-2xl transition-all flex flex-col justify-between",
+                      isBelowMin ? "is-below-min border-rose-950/60 bg-rose-950/[0.02]" : "border-zinc-850 hover:border-zinc-750"
+                    )}
+                  >
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="flex items-center gap-4">
+                        {/* Visual Category Icon container */}
+                        <div className={cn(
+                          "w-11 h-11 rounded-xl flex items-center justify-center border",
+                          item.category === 'PEÇAS' ? "bg-blue-950/20 border-blue-900/40 text-blue-500" :
+                          item.category === 'LIMPEZA' ? "bg-emerald-950/20 border-emerald-900/40 text-emerald-500" :
+                          "bg-purple-950/20 border-purple-900/40 text-purple-500"
+                        )}>
+                          {item.category === 'PEÇAS' ? <Wrench size={18} /> : 
+                           item.category === 'LIMPEZA' ? <Brush size={18} /> : 
+                           <PenTool size={18} />}
+                        </div>
+                        
+                        <div>
+                          <h4 className="font-extrabold text-white uppercase text-xs tracking-tight">{item.name}</h4>
+                          <span className={cn(
+                            "inline-block px-2 py-0.5 rounded text-[7px] font-black tracking-widest mt-1 uppercase",
+                            item.category === 'PEÇAS' ? "bg-blue-950/50 text-blue-400 border border-blue-900/40" :
+                            item.category === 'LIMPEZA' ? "bg-emerald-950/50 text-emerald-400 border border-emerald-900/40" :
+                            "bg-purple-950/50 text-purple-400 border border-purple-900/40"
+                          )}>
+                            {item.category}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="text-right">
+                        <p className="font-extrabold text-white text-xl leading-none">{item.quantity}</p>
+                        <span className="text-[8px] text-zinc-500 font-black mt-1 block uppercase">{item.unit}</span>
+                      </div>
+                    </div>
+
+                    <div className="mt-5 pt-3 border-t border-zinc-900/80 flex items-center justify-between">
+                      <span className="text-[8px] font-black text-zinc-500 uppercase tracking-widest">
+                        Mín. Recomendável: <strong className="text-zinc-300">{item.minQuantity} {item.unit}</strong>
+                      </span>
+
+                      {isBelowMin ? (
+                        <span className="flex items-center gap-1.5 px-2.5 py-0.5 rounded-md bg-rose-950/40 text-rose-500 border border-rose-900/40 text-[7px] font-black tracking-widest uppercase">
+                          <AlertTriangle size={8} className="animate-pulse-soft text-rose-500 shrink-0" /> REPOSIÇÃO
+                        </span>
+                      ) : (
+                        <span className="flex items-center gap-1 px-2.5 py-0.5 rounded-md bg-emerald-950/30 text-emerald-500 border border-emerald-900/40 text-[7px] font-black tracking-widest uppercase">
+                          <Check size={8} /> DISPONÍVEL
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Operational Hover Actions */}
+                    <div className="absolute right-3 top-3 opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1">
+                      <button 
+                        onClick={() => handleDeleteItem(item.id, item.name)}
+                        title="Excluir item"
+                        className="p-1.5 bg-zinc-950/80 border border-zinc-800 rounded-lg text-rose-500 hover:bg-rose-900 hover:text-white transition-all cursor-pointer"
+                      >
+                        <Trash2 size={12} />
+                      </button>
+                      <button 
+                        onClick={() => {
+                          setTxType('ENTRADA');
+                          setSelectedItemForTx(item);
+                          setIsTxModalOpen(true);
+                        }}
+                        title="Entrada" 
+                        className="p-1.5 bg-emerald-950/80 border border-emerald-900 rounded-lg text-emerald-400 hover:bg-emerald-900 hover:text-white transition-all cursor-pointer"
+                      >
+                        <ArrowUpRight size={12} />
+                      </button>
+                      <button 
+                        onClick={() => {
+                          setTxType('SAÍDA');
+                          setSelectedItemForTx(item);
+                          setIsTxModalOpen(true);
+                        }}
+                        title="Uso / Retirada" 
+                        className="p-1.5 bg-rose-950/80 border border-rose-900 rounded-lg text-rose-450 hover:bg-rose-900 hover:text-white transition-all cursor-pointer"
+                      >
+                        <ArrowDownLeft size={12} />
+                      </button>
+                    </div>
+                  </div>
+                );
+              })
+            ) : (
+              <div className="col-span-full py-16 text-center">
+                <Package size={40} className="text-zinc-700 mx-auto mb-4" />
+                <p className="text-zinc-500 text-xs font-extrabold uppercase tracking-widest">Nenhum item localizado no almoxarifado</p>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* LAUNCHED STOCK TRANSACTIONS ACTIVITY HISTORY LOG */}
@@ -1036,6 +1786,7 @@ export const InventoryManagement: React.FC<InventoryManagementProps> = ({ userRo
               onChange={(e: any) => setNewFieldCategory(e.target.value)}
               options={[
                 { value: 'PEÇAS', label: '🛠 PEÇAS & MANUTENÇÃO' },
+                { value: 'PNEUS', label: '🛞 PNEUS' },
                 { value: 'LIMPEZA', label: '🧹 PRODUTOS DE LIMPEZA' },
                 { value: 'ESCRITÓRIO', label: '📁 ESCRITÓRIO & SUPRIMENTOS' }
               ]}
@@ -1049,6 +1800,20 @@ export const InventoryManagement: React.FC<InventoryManagementProps> = ({ userRo
               onChange={(e: any) => setNewFieldUnit(e.target.value)}
             />
           </div>
+
+          {newFieldCategory === 'PNEUS' && (
+            <Select 
+              label="Tipo de Veículo (Para Separação das Colunas)"
+              value={newFieldVehicleType}
+              onChange={(e: any) => setNewFieldVehicleType(e.target.value as any)}
+              options={[
+                { value: 'ÔNIBUS', label: '🚌 ÔNIBUS' },
+                { value: 'MICRO-ÔNIBUS', label: '🚐 MICRO-ÔNIBUS' },
+                { value: 'VAN', label: '🚗 VAN' },
+                { value: 'OUTROS', label: '⚙️ OUTROS' }
+              ]}
+            />
+          )}
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <Input 

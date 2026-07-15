@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { memo } from 'react';
 import { motion, HTMLMotionProps } from 'framer-motion';
 import { cn } from '../lib/utils';
 
@@ -12,6 +12,9 @@ export const Card = ({ children, className, ...props }: CardProps) => (
     animate={{ opacity: 1, y: 0 }}
     whileHover={{ 
       y: -8, 
+      scale: 1.025,
+      boxShadow: "0 20px 40px -15px rgba(255, 107, 0, 0.15), 0 0 25px 3px rgba(255, 107, 0, 0.1)",
+      borderColor: "rgba(255, 107, 0, 0.35)",
       transition: { duration: 0.3, ease: "easeOut" } 
     }}
     transition={{ type: "spring", stiffness: 260, damping: 20 }}
@@ -30,10 +33,15 @@ interface StatCardProps {
   trend?: string;
   color: string;
   glow?: string;
+  onClick?: () => void;
+  className?: string;
 }
 
-export const StatCard = ({ title, value, icon: Icon, trend, color, glow }: StatCardProps) => (
-  <Card className={cn("flex flex-col gap-8 border-white/5", glow)}>
+export const StatCard = memo(({ title, value, icon: Icon, trend, color, glow, onClick, className }: StatCardProps) => (
+  <Card 
+    onClick={onClick} 
+    className={cn("flex flex-col gap-8 border-white/5", onClick && "cursor-pointer active:scale-95 hover:border-brand-accent/30 transition-all", glow, className)}
+  >
     <div className={cn("w-14 h-14 rounded-2xl flex items-center justify-center shadow-2xl transform -rotate-3 transition-transform group-hover:rotate-0", color)}>
       <Icon className="w-7 h-7 text-asphalt-950" strokeWidth={2.5} />
     </div>
@@ -50,4 +58,4 @@ export const StatCard = ({ title, value, icon: Icon, trend, color, glow }: StatC
       )}
     </div>
   </Card>
-);
+));

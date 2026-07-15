@@ -242,12 +242,12 @@ export const TransactionDetailModal: React.FC<TransactionDetailModalProps> = ({
         </div>
 
         {/* Actions Footer */}
-        <div className="p-6 border-t border-zinc-900 flex justify-between items-center gap-3">
+        <div className="p-6 border-t border-zinc-900 flex flex-col sm:flex-row justify-between items-stretch sm:items-center gap-4">
           {/* Delete Action button if not already confirming */}
           {!confirmDelete ? (
             <button
               onClick={() => setConfirmDelete(true)}
-              className="px-4 py-3 bg-zinc-900 hover:bg-rose-600/10 text-zinc-500 hover:text-rose-500 rounded-xl text-xs uppercase tracking-widest border border-zinc-800 font-bold transition-all flex items-center gap-2"
+              className="px-4 py-3.5 sm:py-3 bg-zinc-900 hover:bg-rose-600/10 text-zinc-500 hover:text-rose-500 rounded-xl text-xs uppercase tracking-widest border border-zinc-800 font-bold transition-all flex items-center justify-center gap-2"
               title="Excluir Lançamento"
             >
               <Trash2 size={14} />
@@ -257,17 +257,17 @@ export const TransactionDetailModal: React.FC<TransactionDetailModalProps> = ({
             <div />
           )}
 
-          <div className="flex gap-2">
+          <div className="flex flex-col sm:flex-row gap-3 sm:gap-2">
             <button
               onClick={onClose}
-              className="px-5 py-3 bg-zinc-900 hover:bg-zinc-850 text-zinc-400 hover:text-white rounded-xl text-xs uppercase tracking-widest border border-zinc-800 font-bold"
+              className="px-5 py-3.5 sm:py-3 bg-zinc-900 hover:bg-zinc-850 text-zinc-400 hover:text-white rounded-xl text-xs uppercase tracking-widest border border-zinc-800 font-bold"
             >
               Cancelar
             </button>
             <button
               onClick={handleSave}
               disabled={isSaving}
-              className="px-5 py-3 bg-brand-accent hover:bg-brand-accent/90 text-zinc-950 rounded-xl font-black text-xs uppercase tracking-widest flex items-center gap-2 shadow-lg disabled:opacity-50"
+              className="px-5 py-3.5 sm:py-3 bg-brand-accent hover:bg-brand-accent/90 text-zinc-950 rounded-xl font-black text-xs uppercase tracking-widest flex items-center justify-center gap-2 shadow-lg disabled:opacity-50"
             >
               <Save size={15} />
               {isSaving ? 'Salvando...' : 'Salvar'}

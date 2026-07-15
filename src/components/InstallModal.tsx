@@ -29,7 +29,7 @@ export const InstallModal = ({ isOpen, onClose, onInstall, isInstallable }: Inst
 
   const downloadShortcut = () => {
     const appUrl = window.location.origin;
-    const shortcutContent = `[InternetShortcut]\nURL=${appUrl}\nIDList=\nIconIndex=0\nIconFile=${appUrl}/logo_dm.svg`;
+    const shortcutContent = `[InternetShortcut]\nURL=${appUrl}\nIDList=\nIconIndex=0\nIconFile=${appUrl}/logo.svg`;
     const blob = new Blob([shortcutContent], { type: 'text/plain' });
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -63,7 +63,7 @@ export const InstallModal = ({ isOpen, onClose, onInstall, isInstallable }: Inst
             <div className="p-8 pb-4 flex items-center justify-between border-b border-zinc-800/50">
               <div className="flex items-center gap-4">
                 <div className="w-16 h-16 bg-brand-accent rounded-2xl flex items-center justify-center border border-brand-accent/20 shadow-[0_0_20px_rgba(255,107,0,0.3)] transform rotate-3">
-                   <span className="text-zinc-950 font-black text-2xl">DM</span>
+                   <span className="text-zinc-950 font-black text-2xl">EF</span>
                 </div>
                 <div>
                   <h3 className="text-xl font-black text-white uppercase tracking-tighter">Instalar App Pro</h3>
@@ -83,7 +83,7 @@ export const InstallModal = ({ isOpen, onClose, onInstall, isInstallable }: Inst
               {/* Context Summary */}
               <div className="bg-brand-accent/5 p-4 rounded-2xl border border-brand-accent/10">
                 <p className="text-[10px] font-bold text-brand-accent uppercase tracking-widest text-center leading-relaxed">
-                  Para facilitar o seu dia, coloque o ícone da DM na tela do seu celular. Ver as viagens será muito mais rápido!
+                  Para facilitar o seu dia, coloque o ícone do DM Turismo na tela do seu celular. Ver as viagens será muito mais rápido!
                 </p>
               </div>
 

@@ -1,38 +1,62 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
-import { initializeFirestore, doc, getDocFromServer } from 'firebase/firestore';
+import { initializeFirestore, doc, getDocFromServer, setLogLevel, enableMultiTabIndexedDbPersistence } from 'firebase/firestore';
+import { getStorage } from 'firebase/storage';
+import { getMessaging } from 'firebase/messaging';
 import firebaseConfig from '../../firebase-applet-config.json';
+
+// Silence verbose firebase warnings in sandbox / iframe environments
+setLogLevel('error');
 
 const app = initializeApp(firebaseConfig);
 
 // Initialize Firestore with experimentalForceLongPolling enabled for sandboxed environments and custom database support
 export const db = initializeFirestore(app, {
   experimentalForceLongPolling: true,
-}, firebaseConfig.firestoreDatabaseId);
+  useFetchStreams: false,
+} as any, firebaseConfig.firestoreDatabaseId);
+
+// Enable robust Multi-Tab Offline Persistence for real-time and offline employee operations
+try {
+  enableMultiTabIndexedDbPersistence(db).catch((err) => {
+    if (err.code === 'failed-precondition') {
+      console.warn('[Firestore Persistence] Precondition failed (multiple tabs open).');
+    } else if (err.code === 'unimplemented') {
+      console.warn('[Firestore Persistence] Unimplemented in current browser environment.');
+    } else {
+      console.error('[Firestore Persistence] Error:', err);
+    }
+  });
+} catch (e) {
+  console.warn('[Firestore Persistence] Enable multi-tab failed:', e);
+}
 
 export const auth = getAuth();
+export const storage = getStorage(app);
 
-// CRITICAL CONSTRAINT: Test connection on boot with descriptive errors
+let messagingInstance: any = null;
+try {
+  // Safe initialization of Firebase Messaging to prevent throwing "messaging/unsupported-browser"
+  messagingInstance = getMessaging(app);
+} catch (error) {
+  console.warn('[FCM] Firebase Messaging is not supported in this browser environment:', error);
+}
+export const messaging = messagingInstance;
+
+// Test connection on boot quietly - disabled to prevent throwing eager connectivity alerts in sandbox/offline environments.
+/*
 async function testConnection() {
   try {
     // Attempt to fetch a non-existent document from the server to verify connectivity
     await getDocFromServer(doc(db, 'test', 'connection'));
     console.log("Firestore connection successful.");
   } catch (error: any) {
-    console.warn("Firestore initialization status:", {
-      code: error.code,
-      message: error.message,
-      databaseId: firebaseConfig.firestoreDatabaseId,
-      projectId: firebaseConfig.projectId
-    });
-    
-    if (error.code === 'unavailable' || error.message.includes('offline') || error.code === 'failed-precondition') {
-      // Notify UI about connectivity issues or setup delays with a warning rather than triggering a crash alert
-      console.warn("Firestore connectivity notice: The database connection is in offline/lazy-loading status. The client will synchronize once the backend is reachable.");
-    }
+    // Quietly log to avoid cluttering in offline/sandbox environments
+    console.log("Firestore status: Offline local replica running (standard for preview/sandboxes)");
   }
 }
 testConnection();
+*/
 
 export enum OperationType {
   CREATE = 'create',
@@ -79,4 +103,22 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
   };
   console.error('Firestore Error: ', JSON.stringify(errInfo));
   throw new Error(JSON.stringify(errInfo));
+}
+
+export function cleanUndefined<T>(obj: T): T {
+  if (obj === null || obj === undefined) return null as any;
+  if (Array.isArray(obj)) {
+    return obj.map(item => cleanUndefined(item)) as any;
+  }
+  if (typeof obj === 'object') {
+    const newObj: any = {};
+    for (const key of Object.keys(obj)) {
+      const val = (obj as any)[key];
+      if (val !== undefined) {
+        newObj[key] = cleanUndefined(val);
+      }
+    }
+    return newObj;
+  }
+  return obj;
 }

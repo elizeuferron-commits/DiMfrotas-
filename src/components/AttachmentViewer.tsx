@@ -135,25 +135,29 @@ export const AttachmentViewer: React.FC<AttachmentViewerProps> = ({
                   <Eye size={16} />
                 </button>
               )}
-              <a 
-                href={file.url}
-                download={file.name}
-                target="_blank"
-                rel="noreferrer"
-                className="p-2.5 bg-asphalt-800 text-asphalt-400 hover:bg-emerald-500 hover:text-asphalt-950 rounded-xl transition-all shadow-sm"
-                title="Download"
-              >
-                <Download size={16} />
-              </a>
-              <a 
-                href={file.url}
-                target="_blank"
-                rel="noreferrer"
-                className="p-2.5 bg-asphalt-800 text-asphalt-400 hover:bg-asphalt-700 hover:text-white rounded-xl transition-all shadow-sm"
-                title="Abrir em Nova Aba"
-              >
-                <ExternalLink size={16} />
-              </a>
+              {file.url !== 'view-os' && (
+                <>
+                  <a 
+                    href={file.url}
+                    download={file.name}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="p-2.5 bg-asphalt-800 text-asphalt-400 hover:bg-emerald-500 hover:text-asphalt-950 rounded-xl transition-all shadow-sm"
+                    title="Download"
+                  >
+                    <Download size={16} />
+                  </a>
+                  <a 
+                    href={file.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="p-2.5 bg-asphalt-800 text-asphalt-400 hover:bg-asphalt-700 hover:text-white rounded-xl transition-all shadow-sm"
+                    title="Abrir em Nova Aba"
+                  >
+                    <ExternalLink size={16} />
+                  </a>
+                </>
+              )}
             </div>
           </div>
         ))}

@@ -1,4 +1,13 @@
-import React, { useState } from 'react';
+import { 
+  collection, 
+  getDocs, 
+  query, 
+  where, 
+  doc, 
+  updateDoc 
+} from 'firebase/firestore';
+import { db } from '../lib/firebase';
+import React, { useState, useMemo } from 'react';
 import { 
   Users, 
   Plus, 
@@ -12,9 +21,18 @@ import {
   Camera,
   Phone,
   ShieldCheck,
-  Key
+  Key,
+  Share2,
+  Unlock,
+  AlertTriangle,
+  Search
 } from 'lucide-react';
-import { format } from 'date-fns';
+import { toast } from 'sonner';
+import { 
+  format, 
+  differenceInDays, 
+  parseISO 
+} from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { Card } from './Cards';
 import { Employee } from '../types';
@@ -45,12 +63,43 @@ export const StaffManagement: React.FC<StaffManagementProps> = ({
   user
 }) => {
   const [activeTab, setActiveTab] = useState<'employees' | 'point' | 'users' | 'permissions'>('employees');
+  const [searchTerm, setSearchTerm] = useState('');
+  const [roleFilter, setRoleFilter] = useState('Todos');
 
-  const showPointTab = hasPermission(user?.role, 'point', user?.email, user?.permissions, user?.displayName);
+  const availableRoles = useMemo(() => {
+    const rolesSet = new Set(employees.map(e => e.role).filter(Boolean));
+    return ['Todos', ...Array.from(rolesSet)];
+  }, [employees]);
+
+  const filteredEmployees = useMemo(() => {
+    return employees.filter(e => {
+      const term = searchTerm.trim().toLowerCase();
+      if (!term) return roleFilter === 'Todos' || e.role === roleFilter;
+
+      const matchesSearch = 
+        (e.name || '').toLowerCase().includes(term) ||
+        (e.role || '').toLowerCase().includes(term) ||
+        (e.email || '').toLowerCase().includes(term) ||
+        (e.phone || '').includes(term) ||
+        (e.cpf || '').includes(term);
+
+      const matchesRole = roleFilter === 'Todos' || e.role === roleFilter;
+      return matchesSearch && matchesRole;
+    });
+  }, [employees, searchTerm, roleFilter]);
+
+  const showPointTab = user?.role === 'Dono / Proprietário' || 
+                       user?.role === 'Dono' || 
+                       user?.role === 'Proprietário' || 
+                       user?.role === 'Administrativo' ||
+                       hasPermission(user?.role, 'finance', user?.email, user?.permissions, user?.displayName) ||
+                       hasPermission(user?.role, 'point', user?.email, user?.permissions, user?.displayName);
+
   const showUsersTab = user?.role === 'Dono / Proprietário' || 
                        user?.role === 'Dono' || 
                        user?.role === 'Proprietário' || 
                        user?.role === 'Administrativo' ||
+                       hasPermission(user?.role, 'finance', user?.email, user?.permissions, user?.displayName) ||
                        user?.email === 'elizeuferron@gmail.com';
 
   // Determine current tab safely based on visibility permissions
@@ -58,6 +107,34 @@ export const StaffManagement: React.FC<StaffManagementProps> = ({
     activeTab === 'point' && !showPointTab ? 'employees' : 
     activeTab === 'users' && !showUsersTab ? 'employees' : 
     activeTab;
+
+  const liberarAcessoParaTodos = async () => {
+    try {
+      const usersRef = collection(db, 'users');
+      const q = query(usersRef, where('role', 'in', ['Pendente de Liberação', 'Aguardando Liberação']));
+      const querySnapshot = await getDocs(q);
+      
+      let count = 0;
+      for (const userDoc of querySnapshot.docs) {
+        const userData = userDoc.data();
+        const employeeMatch = employees.find(e => e.email === userData.email);
+        
+        if (employeeMatch) {
+          await updateDoc(doc(db, 'users', userDoc.id), { role: 'Motorista' });
+          count++;
+        }
+      }
+      
+      if (count > 0) {
+        toast.success(`${count} usuários liberados com sucesso!`);
+      } else {
+        toast.info("Nenhum funcionário com solicitação pendente encontrado no fichário operacional.");
+      }
+    } catch (error) {
+      console.error(error);
+      toast.error('Erro ao liberar acesso em massa.');
+    }
+  };
 
   const downloadInstaller = (evt: React.MouseEvent) => {
     evt.stopPropagation();
@@ -124,17 +201,17 @@ pause`;
               {employees.length} Colaboradores Registrados
             </p>
             <button 
-              onClick={onExportToExcel}
-              className="flex items-center gap-2 px-3 py-1.5 bg-asphalt-900 text-zinc-400 rounded-lg text-[8px] font-black uppercase tracking-widest hover:bg-asphalt-800 hover:text-white transition-all shadow-lg active:scale-95 border border-white/5"
+              onClick={liberarAcessoParaTodos}
+              className="flex items-center gap-2 px-3 py-1.5 bg-emerald-900/50 text-emerald-400 rounded-lg text-[8px] font-black uppercase tracking-widest hover:bg-emerald-900 hover:text-white transition-all shadow-lg active:scale-95 border border-white/5"
             >
-              <FileSpreadsheet size={12} />
-              Excel
+              <Unlock size={12} />
+              Liberar Acessos da Equipe
             </button>
           </div>
         </div>
-        <div className="flex items-center gap-4 text-right justify-between md:justify-end">
+        <div className="flex flex-col sm:flex-row gap-4 items-stretch sm:items-center text-right justify-between md:justify-end w-full">
           {(showPointTab || showUsersTab) && (
-            <div className="flex gap-2 p-1 bg-zinc-950/80 border border-white/5 rounded-2xl">
+            <div className="flex flex-wrap gap-1 p-1 bg-zinc-950/80 border border-white/5 rounded-2xl w-full sm:w-auto">
               <button
                 onClick={() => setActiveTab('employees')}
                 className={cn(
@@ -201,24 +278,70 @@ pause`;
       </div>
       
       {currentTab === 'employees' ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          <button 
-            onClick={onAddEmployee}
-            className="h-full min-h-[220px] flex flex-col items-center justify-center gap-4 bg-zinc-900/30 border-2 border-dashed border-zinc-800 rounded-3xl hover:border-brand-accent/50 hover:bg-zinc-900/50 transition-all group"
-          >
-            <div className="w-12 h-12 bg-zinc-800 rounded-full flex items-center justify-center text-zinc-500 group-hover:bg-brand-accent group-hover:text-zinc-950 transition-all">
-              <Plus size={24} />
+        <div className="space-y-6">
+          {/* Barra de Pesquisa e Filtros Reativos */}
+          <div className="flex flex-col md:flex-row gap-4 items-center justify-between bg-zinc-900/20 p-4 border border-white/5 rounded-3xl backdrop-blur-md">
+            <div className="relative w-full md:max-w-md">
+              <Search size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-zinc-500" />
+              <input
+                type="text"
+                placeholder="Pesquisar por nome, cargo, e-mail..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="w-full bg-zinc-950/50 border border-white/5 rounded-2xl pl-11 pr-4 py-3 text-xs font-semibold text-white placeholder-zinc-500 focus:outline-none focus:border-brand-accent/50 transition-all uppercase tracking-wide"
+              />
             </div>
-            <span className="text-[10px] font-black text-zinc-500 uppercase tracking-widest group-hover:text-white transition-colors">Admitir Funcionário</span>
-          </button>
+            <div className="flex flex-wrap gap-2 w-full md:w-auto items-center justify-end">
+              <span className="text-[9px] font-black text-zinc-500 uppercase tracking-widest mr-2">Cargo:</span>
+              {availableRoles.map(role => (
+                <button
+                  key={role}
+                  onClick={() => setRoleFilter(role)}
+                  className={cn(
+                    "px-3 py-1.5 rounded-xl text-[8px] font-black uppercase tracking-wider transition-all border",
+                    roleFilter === role
+                      ? "bg-zinc-800 text-brand-accent border-brand-accent/20 shadow-md"
+                      : "bg-zinc-950/40 text-zinc-400 border-white/5 hover:text-white"
+                  )}
+                >
+                  {role}
+                </button>
+              ))}
+            </div>
+          </div>
 
-          {employees.map(e => (
-            <Card 
-              key={e.id} 
-              onClick={() => onEditEmployee(e)}
-              className="relative overflow-hidden group border-zinc-800 bg-zinc-900/50 hover:bg-zinc-900 transition-all cursor-pointer p-0"
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            <button 
+              onClick={onAddEmployee}
+              className="h-full min-h-[220px] flex flex-col items-center justify-center gap-4 bg-zinc-900/30 border-2 border-dashed border-zinc-800 rounded-3xl hover:border-brand-accent/50 hover:bg-zinc-900/50 transition-all group"
             >
-              <div className="p-6 border-b border-zinc-800/50 flex items-start justify-between">
+              <div className="w-12 h-12 bg-zinc-800 rounded-full flex items-center justify-center text-zinc-500 group-hover:bg-brand-accent group-hover:text-zinc-950 transition-all">
+                <Plus size={24} />
+              </div>
+              <span className="text-[10px] font-black text-zinc-500 uppercase tracking-widest group-hover:text-white transition-colors">Admitir Funcionário</span>
+            </button>
+
+            {filteredEmployees.map(e => {
+            const expDate = e.licenseExpiration ? parseISO(e.licenseExpiration) : null;
+            const daysToExpiry = expDate ? differenceInDays(expDate, new Date()) : null;
+            const isExpiringSoon = e.role === 'Motorista' && daysToExpiry !== null && daysToExpiry <= 30;
+
+            return (
+              <Card 
+                key={e.id} 
+                onClick={() => onEditEmployee(e)}
+                className={cn(
+                  "relative overflow-hidden group border-zinc-800 bg-zinc-900/50 hover:bg-zinc-900 transition-all cursor-pointer p-0",
+                  isExpiringSoon && "border-amber-500/50"
+                )}
+              >
+                {isExpiringSoon && (
+                  <div className="absolute top-2 right-2 bg-amber-500/10 text-amber-500 border border-amber-500/20 px-2 py-1 rounded-lg flex items-center gap-1 z-10">
+                    <AlertTriangle size={12} />
+                    <span className="text-[8px] font-black uppercase tracking-widest">{daysToExpiry! < 0 ? 'VENCIDA' : `Vence em ${daysToExpiry} d`}</span>
+                  </div>
+                )}
+                <div className="p-6 border-b border-zinc-800/50 flex items-start justify-between">
                 <div className="flex items-center gap-4">
                   <div className="relative group/avatar w-12 h-12 bg-zinc-800 rounded-xl flex items-center justify-center text-zinc-500 overflow-hidden shrink-0">
                     {e.photoUrl ? (
@@ -265,15 +388,56 @@ pause`;
                     <span className="text-[8px] font-black px-1.5 py-0.5 bg-zinc-800 text-zinc-400 rounded uppercase tracking-widest">{e.role}</span>
                   </div>
                 </div>
-                <button 
-                  onClick={(evt) => {
-                    evt.stopPropagation();
-                    onDeleteEmployee(e.id, e.name);
-                  }}
-                  className="p-2 text-zinc-600 hover:text-rose-500 rounded-lg transition-all"
-                >
-                  <Trash2 size={16} />
-                </button>
+                <div className="flex items-center gap-1">
+                  <button 
+                    onClick={(evt) => {
+                      evt.stopPropagation();
+                      const appUrl = window.location.origin;
+                      const shareUrl = `${appUrl}/?emp=${e.id}`;
+                      let permissionText = "Permissões padrão de " + (e.role || "Funcionário");
+                      if (e.permissions && e.permissions.length > 0) {
+                        const labels: Record<string, string> = {
+                          dashboard: "Painel",
+                          trips: "Trabalhos",
+                          fleet: "Gestão de Frotas",
+                          finance: "Financeiros",
+                          fuel: "Abastecimento",
+                          inventory: "Almoxarifado",
+                          gabinete: "Gabinete"
+                        };
+                        permissionText = e.permissions.map(p => labels[p] || p).join(", ");
+                      }
+
+                      const message = `🚀 *DM TURISMO PRO - TERMINAL DE OPERAÇÕES*%0A%0AOlá *${e.name}*! 👋%0A%0AO seu acesso personalizado para o aplicativo da DM Turismo foi pré-estabelecido com as suas credenciais e permissões.%0A%0A💼 *CARGO:* ${e.role || "Colaborador"}%0A🔑 *AUTORIZAÇÕES:* ${permissionText}%0A%0A🔗 *SEU LINK EXCLUSIVO:*%0A${shareUrl}%0A%0A*COMO INSTALAR / UTILIZAR:*%0A1. Abra o link acima no seu smartphone.%0A2. No menu do navegador, clique em "Adicionar à Tela de Início" (para obter o ícone de Aplicativo PWA).%0A3. Todo o seu painel de relatórios, escalas de trabalho e jornadas estará acessível sem necessidade de novas configurações!%0A%0A_DM Turismo - prazer em viajar bem._`;
+                      
+                      if (e.phone) {
+                        const cleanPhone = e.phone.replace(/\D/g, '');
+                        const formattedPhone = cleanPhone.startsWith('55') ? cleanPhone : '55' + cleanPhone;
+                        const whatsappUrl = `https://wa.me/${formattedPhone}?text=${message}`;
+                        window.open(whatsappUrl, '_blank');
+                      } else {
+                        navigator.clipboard.writeText(shareUrl).then(() => {
+                          toast.success("Link exclusivo copiado! Envie-o para o funcionário.");
+                        }).catch(() => {
+                          toast.error("Erro ao copiar o link para área de transferência.");
+                        });
+                      }
+                    }}
+                    className="p-2 text-zinc-500 hover:text-brand-accent rounded-lg transition-all"
+                    title="Compartilhar Acesso Credenciado"
+                  >
+                    <Share2 size={16} />
+                  </button>
+                  <button 
+                    onClick={(evt) => {
+                      evt.stopPropagation();
+                      onDeleteEmployee(e.id, e.name);
+                    }}
+                    className="p-2 text-zinc-600 hover:text-rose-500 rounded-lg transition-all"
+                  >
+                    <Trash2 size={16} />
+                  </button>
+                </div>
               </div>
               <div className="p-6">
                  <div className="flex items-center gap-2">
@@ -293,7 +457,9 @@ pause`;
                 </div>
               </div>
             </Card>
-          ))}
+            );
+          })}
+          </div>
         </div>
       ) : currentTab === 'point' ? (
         <div className="bg-zinc-900/40 rounded-[2.5rem] border border-white/5 p-6 backdrop-blur-md shadow-2xl animate-in fade-in duration-300">
@@ -305,7 +471,7 @@ pause`;
         </div>
       ) : (
         <div className="bg-zinc-900/40 rounded-[2.5rem] border border-white/5 p-6 backdrop-blur-md shadow-2xl animate-in fade-in duration-300">
-          <UserManagement />
+          <UserManagement employees={employees} />
         </div>
       )}
     </div>

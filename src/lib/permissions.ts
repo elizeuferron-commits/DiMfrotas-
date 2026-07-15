@@ -2,24 +2,20 @@ import { UserRole } from '../types';
 
 export let ROLE_PERMISSIONS: Record<string, string[]> = {
   'Dono / Proprietário': [
-    'fleet', 'dashboard', 'finance', 'vencimentos', 'fuel', 
-    'maintenance', 'staff', 'trips', 'os', 'inventory', 'reports',
-    'fretamento', 'criador', 'point'
+    'dashboard', 'trips', 'fleet', 'finance', 'fuel', 'inventory', 'gabinete'
   ],
-  'Motorista': ['fuel', 'maintenance', 'os', 'dashboard', 'criador'],
-  'Limpeza / Conservação': ['inventory', 'fuel', 'os', 'dashboard', 'criador'],
+  'Motorista': ['dashboard', 'trips', 'fuel'],
+  'Limpeza / Conservação': ['dashboard', 'trips', 'fuel', 'inventory'],
   'Administrativo': [
-    'finance', 'inventory', 'reports', 'trips', 'os', 'staff', 'vencimentos', 'dashboard',
-    'fretamento', 'criador'
+    'dashboard', 'trips', 'finance', 'fuel', 'inventory', 'gabinete'
   ],
   'Gestor de Frotas': [
-    'fleet', 'maintenance', 'staff', 'fuel', 'reports', 'dashboard', 'criador'
+    'dashboard', 'trips', 'fleet', 'fuel', 'gabinete'
   ],
   'Coordenador Logístico': [
-    'fleet', 'dashboard', 'vencimentos', 'fuel', 'maintenance', 'staff', 'trips', 'os', 'inventory', 'reports',
-    'fretamento', 'criador'
+    'dashboard', 'trips', 'fleet', 'fuel', 'inventory', 'gabinete'
   ],
-  'Visitante': ['dashboard', 'trips']
+  'Visitante': ['dashboard', 'trips', 'fuel']
 };
 
 export const setRolePermissions = (newPermissions: Record<string, string[]>) => {
@@ -33,16 +29,22 @@ export const hasPermission = (
   userPermissions?: string[],
   name?: string
 ): boolean => {
-  // Check strict 'point' tool restriction first: only owners/proprietários or elizeuferron@gmail.com
-  if (sectionId === 'point') {
-    const isOwner = role === 'Dono / Proprietário' || role === 'Dono' || role === 'Proprietário';
-    const isElizeuEmail = email === 'elizeuferron@gmail.com';
-    
-    return isElizeuEmail || isOwner;
+  const isOwner = role === 'Dono / Proprietário' || role === 'Dono' || role === 'Proprietário' || email === 'elizeuferron@gmail.com';
+
+  // Always allow owners / elizeu for absolutely everything
+  if (isOwner) return true;
+
+  // Check strict 'criador' restriction: strictly Elizeu Ferron
+  if (sectionId === 'criador') {
+    return email === 'elizeuferron@gmail.com';
   }
 
-  // Always allow elizeu for everything else
-  if (email === 'elizeuferron@gmail.com') return true;
+  // Check strict 'point' (Cartão Ponto) restriction: only owners/proprietários or elizeuferron@gmail.com
+  if (sectionId === 'point') {
+    const isOwnerRole = role === 'Dono / Proprietário' || role === 'Dono' || role === 'Proprietário';
+    const isElizeuEmail = email === 'elizeuferron@gmail.com';
+    return isOwnerRole || isElizeuEmail;
+  }
 
   if (!role) return false;
   

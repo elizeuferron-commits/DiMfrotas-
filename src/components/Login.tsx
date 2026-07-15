@@ -22,14 +22,18 @@ import { toast } from 'sonner';
 
 interface LoginProps {
   onSuccess?: () => void;
+  onEmployeeLogin?: (employee: any) => void;
 }
 
-export function Login({ onSuccess }: LoginProps) {
+export function Login({ onSuccess, onEmployeeLogin }: LoginProps) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [showReset, setShowReset] = useState(false);
   const [isEmailView, setIsEmailView] = useState(false);
+  const [isFastAccessView, setIsFastAccessView] = useState(false);
+  const [fastAccessInput, setFastAccessInput] = useState('');
+  const [isFastAccessLoading, setIsFastAccessLoading] = useState(false);
 
   const handleEmailLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -38,7 +42,7 @@ export function Login({ onSuccess }: LoginProps) {
     setLoading(true);
     try {
       await signInWithEmailAndPassword(auth, email.trim(), password);
-      toast.success('Acesso autorizado. Bem-vindo ao DM Pro!');
+      toast.success('Acesso autorizado. Bem-vindo ao DM Turismo Pro!');
       onSuccess?.();
     } catch (error: any) {
       console.error('Login Error:', error);
@@ -48,6 +52,54 @@ export function Login({ onSuccess }: LoginProps) {
       toast.error(message);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleFastAccessLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!fastAccessInput.trim()) {
+      toast.error('Digite seu CPF ou WhatsApp corporativo.');
+      return;
+    }
+
+    setIsFastAccessLoading(true);
+    try {
+      const { collection, getDocs } = await import('firebase/firestore');
+      const { db } = await import('../lib/firebase');
+
+      const querySnapshot = await getDocs(collection(db, 'employees'));
+      const employees = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() as any }));
+
+      const cleanInput = fastAccessInput.replace(/\D/g, '');
+      if (!cleanInput) {
+        toast.error('Informe um CPF ou WhatsApp válido contendo números.');
+        setIsFastAccessLoading(false);
+        return;
+      }
+
+      const matchedEmployee = employees.find(e => {
+        const cleanPhone = (e.phone || '').replace(/\D/g, '');
+        const cleanCpf = (e.cpf || '').replace(/\D/g, '');
+        return (cleanPhone && (cleanPhone.endsWith(cleanInput) || cleanInput.endsWith(cleanPhone))) || 
+               (cleanCpf && cleanCpf === cleanInput);
+      });
+
+      if (matchedEmployee) {
+        if (matchedEmployee.status === 'inactive') {
+          toast.error('Este cadastro de colaborador está inativo. Entre em contato com Elizeu Ferron.');
+          setIsFastAccessLoading(false);
+          return;
+        }
+        toast.success(`Seja bem-vindo, ${matchedEmployee.name}!`);
+        onEmployeeLogin?.(matchedEmployee);
+      } else {
+        toast.error('Colaborador não encontrado com esse CPF ou WhatsApp. Peça para Elizeu Ferron cadastrá-lo.');
+      }
+    } catch (error) {
+      console.error('Error fast login:', error);
+      toast.error('Erro ao buscar cadastro.');
+    } finally {
+      setIsFastAccessLoading(false);
     }
   };
 
@@ -83,29 +135,32 @@ export function Login({ onSuccess }: LoginProps) {
   };
 
   return (
-    <div className="min-h-screen bg-zinc-950 flex items-center justify-center p-6 bg-[url('/background.jpg')] bg-cover bg-center bg-fixed relative">
-      <div className="absolute inset-0 bg-zinc-950/90 backdrop-blur-sm" />
+    <div className="min-h-screen travel-gradient flex items-center justify-center p-6 relative">
+      <div className="absolute inset-0 bg-zinc-950/40 backdrop-blur-[2px]" />
       
       <motion.div 
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         className="w-full max-w-md relative z-10"
       >
-        <div className="bg-zinc-900/80 border border-zinc-800 rounded-3xl p-8 shadow-2xl backdrop-blur-xl">
+        <div className="bg-zinc-900/90 border border-white/5 rounded-3xl p-8 shadow-2xl backdrop-blur-xl">
           <div className="text-center mb-10">
-            <div className="w-20 h-20 bg-brand-accent/10 rounded-2xl flex items-center justify-center mx-auto mb-6 ring-1 ring-brand-accent/20">
-              <ShieldCheck className="w-10 h-10 text-brand-accent" />
+            <div className="w-24 h-24 bg-transparent flex items-center justify-center mx-auto mb-6">
+              <img src="/logo_dm.svg" alt="DM Turismo" className="w-full h-full object-contain" referrerPolicy="no-referrer" />
             </div>
-            <h1 className="text-3xl font-black text-white uppercase tracking-tighter mb-2">
-              DM <span className="text-brand-accent">PRO</span> LOGIN
+            <h1 className="text-3xl font-black text-white uppercase tracking-tighter mb-1">
+              DM <span className="text-brand-accent">TURISMO</span>
             </h1>
+            <p className="text-[10px] text-zinc-400 font-medium lowercase tracking-wide italic font-sans mb-3">
+              prazer em viajar bem
+            </p>
             <p className="text-zinc-500 text-xs font-black uppercase tracking-[0.2em]">
               Central de Acesso Corporativo
             </p>
           </div>
 
           <AnimatePresence mode="wait">
-            {!isEmailView ? (
+            {!isEmailView && !isFastAccessView ? (
               <motion.div
                 key="social-view"
                 initial={{ opacity: 0, x: -20 }}
@@ -114,15 +169,12 @@ export function Login({ onSuccess }: LoginProps) {
                 className="space-y-4"
               >
                 <button
-                  onClick={handleGoogleLogin}
-                  disabled={loading}
-                  className="w-full h-14 bg-white text-zinc-950 rounded-2xl font-black uppercase text-sm flex items-center justify-center gap-3 hover:bg-zinc-200 transition-all hover:scale-[1.02] active:scale-95 disabled:opacity-50"
-                  id="btn-google-login"
+                  onClick={() => setIsFastAccessView(true)}
+                  className="w-full h-14 bg-brand-accent text-zinc-950 rounded-2xl font-black uppercase text-sm flex items-center justify-center gap-3 hover:bg-white hover:scale-[1.02] transition-all shadow-[0_0_20px_rgba(255,107,0,0.25)] cursor-pointer"
+                  id="btn-fast-access"
                 >
-                  {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : (
-                    <img src="https://www.google.com/favicon.ico" className="w-5 h-5" alt="Google" />
-                  )}
-                  Acessar com Google
+                  <Fingerprint className="w-5 h-5" />
+                  Acesso Rápido do Colaborador
                 </button>
 
                 <div className="flex items-center gap-4 my-6">
@@ -132,14 +184,75 @@ export function Login({ onSuccess }: LoginProps) {
                 </div>
 
                 <button
+                  onClick={handleGoogleLogin}
+                  disabled={loading}
+                  className="w-full h-14 bg-white text-zinc-950 rounded-2xl font-black uppercase text-sm flex items-center justify-center gap-3 hover:bg-zinc-200 transition-all hover:scale-[1.02] active:scale-95 disabled:opacity-50 cursor-pointer"
+                  id="btn-google-login"
+                >
+                  {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : (
+                    <img src="https://www.google.com/favicon.ico" className="w-5 h-5" alt="Google" />
+                  )}
+                  Acessar com Google
+                </button>
+
+                <button
                   onClick={() => setIsEmailView(true)}
-                  className="w-full h-14 bg-zinc-800 text-white rounded-2xl font-black uppercase text-sm flex items-center justify-center gap-3 hover:bg-zinc-700 transition-all border border-zinc-700 shadow-lg"
+                  className="w-full h-14 bg-zinc-850 hover:bg-zinc-800 text-white rounded-2xl font-black uppercase text-sm flex items-center justify-center gap-3 transition-all border border-zinc-700 cursor-pointer"
                   id="btn-email-mode"
                 >
                   <Mail className="w-5 h-5 text-brand-accent" />
-                  Acesso com E-mail e Senha
+                  E-mail e Senha (Gestão)
                 </button>
               </motion.div>
+            ) : isFastAccessView ? (
+              <motion.form
+                key="fast-access-view"
+                initial={{ opacity: 0, x: 20 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: -20 }}
+                onSubmit={handleFastAccessLogin}
+                className="space-y-4 text-left"
+              >
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest ml-1">CPF ou WhatsApp do Colaborador</label>
+                  <div className="relative group">
+                    <Fingerprint className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-zinc-600 group-focus-within:text-brand-accent transition-colors" />
+                    <input
+                      type="text"
+                      value={fastAccessInput}
+                      onChange={(e) => setFastAccessInput(e.target.value)}
+                      placeholder="Ex: CPF ou Celular cadastrado"
+                      className="w-full h-14 bg-zinc-950 border border-zinc-800 rounded-2xl pl-12 pr-4 text-white placeholder:text-zinc-700 focus:border-brand-accent focus:ring-1 focus:ring-brand-accent transition-all outline-none text-xs font-bold"
+                      required
+                      id="input-fast-access"
+                    />
+                  </div>
+                  <p className="text-[8px] text-zinc-500 uppercase tracking-wider ml-1 mt-1 font-semibold leading-relaxed">
+                    * Digite os números do seu CPF ou Telefone registrados na sua ficha de funcionário. Não precisa de senha!
+                  </p>
+                </div>
+
+                <div className="pt-2 flex gap-3">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsFastAccessView(false);
+                      setFastAccessInput('');
+                    }}
+                    className="w-20 h-14 bg-zinc-800 text-white rounded-2xl font-black uppercase text-sm flex items-center justify-center hover:bg-zinc-700 transition-all border border-zinc-700 cursor-pointer"
+                  >
+                    <ChevronRight className="w-5 h-5 rotate-180" />
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isFastAccessLoading}
+                    className="flex-1 h-14 bg-brand-accent text-zinc-950 rounded-2xl font-black uppercase text-sm flex items-center justify-center gap-3 hover:bg-brand-accent/90 transition-all shadow-[0_0_20px_rgba(255,107,0,0.2)] disabled:opacity-50 cursor-pointer"
+                    id="btn-fast-access-submit"
+                  >
+                    {isFastAccessLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : "Entrar no Sistema"}
+                  </button>
+                </div>
+              </motion.form>
             ) : (
               <motion.form
                 key="email-view"
@@ -147,7 +260,7 @@ export function Login({ onSuccess }: LoginProps) {
                 animate={{ opacity: 1, x: 0 }}
                 exit={{ opacity: 0, x: -20 }}
                 onSubmit={handleEmailLogin}
-                className="space-y-4"
+                className="space-y-4 text-left"
               >
                 <div className="space-y-1.5">
                   <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest ml-1">E-mail Corporativo</label>
@@ -194,14 +307,14 @@ export function Login({ onSuccess }: LoginProps) {
                   <button
                     type="button"
                     onClick={() => setIsEmailView(false)}
-                    className="w-20 h-14 bg-zinc-800 text-white rounded-2xl font-black uppercase text-sm flex items-center justify-center hover:bg-zinc-700 transition-all border border-zinc-700"
+                    className="w-20 h-14 bg-zinc-800 text-white rounded-2xl font-black uppercase text-sm flex items-center justify-center hover:bg-zinc-700 transition-all border border-zinc-700 cursor-pointer"
                   >
                     <ChevronRight className="w-5 h-5 rotate-180" />
                   </button>
                   <button
                     type="submit"
                     disabled={loading}
-                    className="flex-1 h-14 bg-brand-accent text-zinc-950 rounded-2xl font-black uppercase text-sm flex items-center justify-center gap-3 hover:bg-brand-accent/90 transition-all shadow-[0_0_20px_rgba(255,107,0,0.2)] disabled:opacity-50"
+                    className="flex-1 h-14 bg-brand-accent text-zinc-950 rounded-2xl font-black uppercase text-sm flex items-center justify-center gap-3 hover:bg-brand-accent/90 transition-all shadow-[0_0_20px_rgba(255,107,0,0.2)] disabled:opacity-50 cursor-pointer"
                     id="btn-login-submit"
                   >
                     {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : "Entrar no Sistema"}

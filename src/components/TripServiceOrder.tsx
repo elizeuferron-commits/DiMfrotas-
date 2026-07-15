@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { 
   Printer, 
   Bus, 
@@ -18,16 +18,23 @@ import {
   Trash2,
   CornerDownRight,
   UserCheck2,
-  FileCheck2
+  FileCheck2,
+  DollarSign,
+  TrendingUp,
+  TrendingDown,
+  CalendarDays,
+  Coins,
+  AlertCircle
 } from 'lucide-react';
-import { Trip, Vehicle, Employee } from '../types';
+import { Trip, Vehicle, Employee, FinancialTransaction } from '../types';
 import { format } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { Button } from './UI';
 import { toast } from 'sonner';
-import jsPDF from 'jspdf';
-import autoTable from 'jspdf-autotable';
 import { cn } from '../lib/utils';
+const RouteMap = React.lazy(() => import('./RouteMap').then(m => ({ default: m.RouteMap })));
+import { collection, query, where, onSnapshot } from 'firebase/firestore';
+import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 
 interface TripServiceOrderProps {
   trip: Trip;
@@ -41,6 +48,42 @@ export const TripServiceOrder = ({ trip, vehicle, driver, secondDriver, onDelete
   const [checkedPassengers, setCheckedPassengers] = useState<Record<number, boolean>>({});
   const [isGenerating, setIsGenerating] = useState(false);
   const orderRef = useRef<HTMLDivElement>(null);
+  const [linkedTransactions, setLinkedTransactions] = useState<FinancialTransaction[]>([]);
+  const [loadingTx, setLoadingTx] = useState(true);
+
+  useEffect(() => {
+    if (!trip.id) return;
+    setLoadingTx(true);
+    
+    // Real-time listener for financial transactions matching this trip ID
+    const q = query(
+      collection(db, 'financial_transactions'),
+      where('refId', '==', trip.id)
+    );
+    
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const fetched: FinancialTransaction[] = [];
+      snapshot.forEach((doc) => {
+        fetched.push({ id: doc.id, ...doc.data() } as FinancialTransaction);
+      });
+      
+      // Sort client-side to bypass composite index creation requirement on Firestore
+      fetched.sort((a, b) => {
+        const dateA = a.createdAt || '';
+        const dateB = b.createdAt || '';
+        return dateB.localeCompare(dateA);
+      });
+      
+      setLinkedTransactions(fetched);
+      setLoadingTx(false);
+    }, (error) => {
+      console.error('Erro ao buscar transações vinculadas à viagem:', error);
+      handleFirestoreError(error, OperationType.LIST, 'financial_transactions');
+      setLoadingTx(false);
+    });
+    
+    return () => unsubscribe();
+  }, [trip.id]);
 
   const togglePassenger = (idx: number) => {
     setCheckedPassengers(prev => ({
@@ -57,6 +100,8 @@ export const TripServiceOrder = ({ trip, vehicle, driver, secondDriver, onDelete
   const handleDownloadPDF = async () => {
     setIsGenerating(true);
     try {
+      const jsPDF = (await import('jspdf')).default;
+      const autoTable = (await import('jspdf-autotable')).default;
       const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
       const osNum = trip.osNumber || trip.id.slice(-6).toUpperCase();
       
@@ -64,14 +109,14 @@ export const TripServiceOrder = ({ trip, vehicle, driver, secondDriver, onDelete
       doc.setFillColor(24, 24, 27); // zinc-900 (#18181b)
       doc.rect(0, 0, 210, 42, 'F');
       
-      // Orange Accent Bar under header
-      doc.setFillColor(255, 107, 0); // brand-accent (#ff6b00)
+      // Royal Blue Accent Bar under header
+      doc.setFillColor(26, 80, 241); // brand-accent (#1a50f1)
       doc.rect(0, 40, 210, 2, 'F');
       
       // Typographic Logo in the header
       doc.setFont('helvetica', 'bold');
       doc.setFontSize(24);
-      doc.setTextColor(255, 107, 0); // Orange brand-accent
+      doc.setTextColor(26, 80, 241); // Royal blue brand-accent
       doc.text('DM TURISMO', 14, 18);
       
       doc.setFont('helvetica', 'normal');
@@ -89,7 +134,7 @@ export const TripServiceOrder = ({ trip, vehicle, driver, secondDriver, onDelete
       
       doc.setFont('helvetica', 'normal');
       doc.setFontSize(9);
-      doc.setTextColor(255, 107, 0);
+      doc.setTextColor(26, 80, 241);
       doc.text(`NÚMERO DA O.S.: ${osNum}`, 196, 21, { align: 'right' });
       
       doc.setFontSize(8);
@@ -107,9 +152,9 @@ export const TripServiceOrder = ({ trip, vehicle, driver, secondDriver, onDelete
       doc.text('1. DADOS DE CADASTRO DA VIAGEM / ITINERÁRIO', 14, 52);
       
       const itinerarioDetails = [
-        ['Título da Viagem / Serviço:', trip.title.toUpperCase(), 'Status Oficial:', trip.status === 'active' ? 'EM CURSO / OPERANTE' : 'ESCALADO / AGENDADO'],
+        ['Título da Viagem / Serviço:', trip.title.toUpperCase(), 'Cliente / Fretante:', (trip.client || 'NÃO ESPECIFICADO').toUpperCase()],
         ['Local de Embarque (Origem):', trip.origin.toUpperCase(), 'Local de Desembarque (Destino):', trip.destination.toUpperCase()],
-        ['Data & Horário de Partida:', format(new Date(trip.startDate), "dd 'de' MMMM 'de' yyyy 'às' HH:mm", { locale: ptBR }), 'Previsão de Retorno:', '-- / Conclusão Padrão']
+        ['Data & Horário de Partida:', format(new Date(trip.startDate), "dd 'de' MMMM 'de' yyyy 'às' HH:mm", { locale: ptBR }), 'Status Oficial:', trip.status === 'active' ? 'EM CURSO / OPERANTE' : trip.status === 'completed' ? 'FINALIZADA' : 'ESCALADO / AGENDADO']
       ];
       
       autoTable(doc, {
@@ -134,10 +179,9 @@ export const TripServiceOrder = ({ trip, vehicle, driver, secondDriver, onDelete
       doc.text('2. ESCALA OPERACIONAL (FROTA & TRIPULAÇÃO)', 14, currentY);
       
       const frotaDetails = [
-        ['Veículo Escalado:', vehicle ? `${vehicle.model.toUpperCase()} (PLACA: ${vehicle.plate.toUpperCase()})` : 'AGUARDANDO ESCALA', 'Capacidade Frota:', vehicle ? `${vehicle.capacity} LUGARES` : '-- PAS'],
-        ['Categoria / Ano:', vehicle ? `${vehicle.type.toUpperCase()} • DE ${vehicle.factoryYear}` : 'CLASSIFICAÇÃO TURISMO', 'Controle Antt:', vehicle?.anttExpiration ? `EXPIRA EM ${format(new Date(vehicle.anttExpiration), 'dd/MM/yyyy')}` : 'REGULARIZADO'],
-        ['Motorista Principal:', driver ? `${driver.name.toUpperCase()} (CPF: ${driver.cpf || '---'})` : 'NÃO ESCALADO', 'Contato Celular:', driver?.phone || '---'],
-        ['Segundo Motorista (Revezamento):', secondDriver ? `${secondDriver.name.toUpperCase()} (CPF: ${secondDriver.cpf || '---'})` : 'NÃO EXIGIDO NESTA ROTA', 'Contato Celular:', secondDriver?.phone || '---']
+        ['Veículo Escalado:', vehicle ? `${vehicle.model.toUpperCase()} (PLACA: ${vehicle.plate.toUpperCase()})` : 'AGUARDANDO ESCALA', 'Capacidade Frota:', vehicle ? `${vehicle.capacity} LUGARES` : '-- PAS', 'Status Antt:', vehicle?.anttExpiration ? `EXPIRA EM ${format(new Date(vehicle.anttExpiration), 'dd/MM/yyyy')}` : 'REGULARIZADO'],
+        ['Motorista Principal:', driver ? `${driver.name.toUpperCase()} (CPF: ${driver.cpf || '---'})` : (trip.driverId ? `${trip.driverId.toUpperCase()} (MANUAL)` : 'NÃO ESCALADO'), 'Contato Celular:', driver?.phone || '---'],
+        ['Segundo Motorista (Revezamento):', secondDriver ? `${secondDriver.name.toUpperCase()} (CPF: ${secondDriver.cpf || '---'})` : (trip.secondDriverId ? `${trip.secondDriverId.toUpperCase()} (MANUAL)` : 'NÃO EXIGIDO NESTA ROTA'), 'Contato Celular:', secondDriver?.phone || '---']
       ];
       
       autoTable(doc, {
@@ -207,7 +251,7 @@ export const TripServiceOrder = ({ trip, vehicle, driver, secondDriver, onDelete
           head: [['SEQ', 'DADO COMPLETO DO PASSAGEIRO', 'DOCUMENTO DE IDENTIDADE (RG / CPF)', 'STATUS CONTROLE']],
           body: passengerRows,
           theme: 'grid',
-          headStyles: { fillColor: [255, 107, 0], textColor: [24, 24, 27], fontStyle: 'bold', halign: 'center', fontSize: 7.5 },
+          headStyles: { fillColor: [26, 80, 241], textColor: [255, 255, 255], fontStyle: 'bold', halign: 'center', fontSize: 7.5 },
           bodyStyles: { fontSize: 7.5, halign: 'left' },
           columnStyles: {
             0: { cellWidth: 12, halign: 'center', fontStyle: 'bold' },
@@ -263,11 +307,11 @@ export const TripServiceOrder = ({ trip, vehicle, driver, secondDriver, onDelete
       doc.setFont('helvetica', 'normal');
       doc.setTextColor(113, 113, 122);
       doc.text('DECLARAÇÃO DE RECEBIMENTO DA GUIA E ESCALA', 14, currentY + 4);
-      doc.text(driver ? driver.name.toUpperCase() : 'NOME DO MOTORISTA ESCALADO', 14, currentY + 8);
+      doc.text(driver ? driver.name.toUpperCase() : (trip.driverId ? trip.driverId.toUpperCase() : 'NOME DO MOTORISTA ESCALADO'), 14, currentY + 8);
       
       doc.line(120, currentY, 196, currentY);
       doc.text('GERENTE DE LOGÍSTICA / DIRETORIA OPERACIONAL', 120, currentY + 4);
-      doc.text('AUTORIZADO POR: DEPARTAMENTO DE CONTROLE DM', 120, currentY + 8);
+      doc.text('AUTORIZADO POR: DEPARTAMENTO DE CONTROLE DM TURISMO', 120, currentY + 8);
       
       doc.save(`OS_DM_TURISMO_${osNum}.pdf`);
       toast.success('Guva de Ordem de Serviço exportada em PDF!');
@@ -278,6 +322,14 @@ export const TripServiceOrder = ({ trip, vehicle, driver, secondDriver, onDelete
       setIsGenerating(false);
     }
   };
+
+  const manifestCount = trip.passengers?.length || 0;
+  const boardedCount = Object.values(checkedPassengers).filter(Boolean).length;
+  const vehicleCapacity = vehicle?.capacity || 0;
+  const occupancyPercentage = vehicleCapacity > 0 
+    ? Math.min(Math.round((manifestCount / vehicleCapacity) * 100), 100) 
+    : 0;
+  const isOverCapacity = vehicleCapacity > 0 && manifestCount > vehicleCapacity;
 
   const allChecked = trip.passengers && trip.passengers.length > 0 && 
     trip.passengers.every((_, idx) => checkedPassengers[idx]);
@@ -335,6 +387,257 @@ export const TripServiceOrder = ({ trip, vehicle, driver, secondDriver, onDelete
         </div>
       </div>
 
+      {/* Visual Passenger Summary Widget */}
+      <div className="no-print p-6 bg-zinc-900 border border-zinc-800 rounded-2xl shadow-xl space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-zinc-800 pb-4">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-orange-500/10 flex items-center justify-center text-brand-accent shadow-inner">
+              <Users size={18} />
+            </div>
+            <div>
+              <h3 className="text-xs font-black text-white uppercase tracking-widest leading-none mb-1">
+                Controle de Ocupação & Capacidade
+              </h3>
+              <p className="text-[9px] text-zinc-500 font-bold uppercase tracking-wide">
+                Verificação de passageiros escalonados contra a capacidade técnica do veículo
+              </p>
+            </div>
+          </div>
+          
+          <div className="flex items-center gap-2">
+            {isOverCapacity ? (
+              <span className="text-[8px] font-black px-2.5 py-1 bg-rose-500/10 border border-rose-500/20 text-rose-500 rounded-lg uppercase animate-pulse flex items-center gap-1">
+                <AlertCircle size={10} />
+                Capacidade Excedida
+              </span>
+            ) : vehicleCapacity > 0 ? (
+              <span className="text-[8px] font-black px-2.5 py-1 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 rounded-lg uppercase flex items-center gap-1">
+                <ShieldCheck size={10} />
+                Limite Conforme
+              </span>
+            ) : (
+              <span className="text-[8px] font-black px-2.5 py-1 bg-zinc-800 border border-zinc-700 text-zinc-400 rounded-lg uppercase">
+                Aguardando Frota
+              </span>
+            )}
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          {/* Col 1: Passageiros Confirmados en lista (Manifesto) */}
+          <div className="p-4 bg-zinc-950/40 border border-zinc-850 rounded-xl flex flex-col justify-center">
+            <span className="text-[8px] font-black text-zinc-500 uppercase tracking-widest mb-1">Manifesto do Fretamento</span>
+            <div className="flex items-baseline gap-1">
+              <span className="text-xl font-black text-white tabular-nums">{manifestCount}</span>
+              <span className="text-[10px] text-zinc-550 font-bold uppercase">PAX salvos</span>
+            </div>
+            <p className="text-[7.5px] text-zinc-600 font-black uppercase mt-1">Total listados na guia física</p>
+          </div>
+
+          {/* Col 2: Confirmados no Check-in (Embarcados) */}
+          <div className="p-4 bg-zinc-950/40 border border-zinc-850 rounded-xl flex flex-col justify-center">
+            <span className="text-[8px] font-black text-zinc-500 uppercase tracking-widest mb-1">Passageiros Confirmados (Check-in)</span>
+            <div className="flex items-baseline gap-1">
+              <span className={cn(
+                "text-xl font-black tabular-nums transition-colors",
+                boardedCount > 0 ? "text-emerald-400" : "text-zinc-400"
+              )}>
+                {boardedCount} / {manifestCount}
+              </span>
+              <span className="text-[10px] text-zinc-550 font-bold uppercase">embarcados</span>
+            </div>
+            <p className="text-[7.5px] text-zinc-600 font-black uppercase mt-1">
+              {manifestCount > 0 ? `${Math.round((boardedCount / manifestCount) * 100)}% de presença confirmada` : "Nenhum passageiro na escala"}
+            </p>
+          </div>
+
+          {/* Col 3: Capacidade total do Veículo */}
+          <div className="p-4 bg-zinc-950/40 border border-zinc-850 rounded-xl flex flex-col justify-center">
+            <span className="text-[8px] font-black text-zinc-500 uppercase tracking-widest mb-1">Capacidade Total do Veículo</span>
+            <div className="flex items-baseline gap-1">
+              <span className={cn(
+                "text-xl font-black tabular-nums",
+                isOverCapacity ? "text-rose-500" : vehicleCapacity > 0 ? "text-brand-accent" : "text-zinc-500"
+              )}>
+                {vehicleCapacity > 0 ? vehicleCapacity : "---"}
+              </span>
+              <span className="text-[10px] text-zinc-550 font-bold uppercase">LUGARES</span>
+            </div>
+            <p className="text-[7.5px] text-zinc-600 font-black uppercase mt-1">
+              {vehicle ? `${vehicle.model.toUpperCase()} (${vehicle.plate.toUpperCase()})` : "Sem escala de frota"}
+            </p>
+          </div>
+        </div>
+
+        {/* Custom Visual Progress Track */}
+        <div className="space-y-1.5 pt-1">
+          <div className="flex items-center justify-between text-[8px] font-black uppercase tracking-wider text-zinc-500">
+            <span>Uso de Capacidade: {occupancyPercentage}%</span>
+            <span>{manifestCount} PAX de {vehicleCapacity} total</span>
+          </div>
+          
+          <div className="h-2.5 w-full bg-zinc-950 rounded-full overflow-hidden border border-zinc-850/80 p-[1px] relative">
+            <div 
+              className={cn(
+                "h-full rounded-full transition-all duration-500",
+                isOverCapacity 
+                  ? "bg-rose-500" 
+                  : occupancyPercentage >= 90 
+                    ? "bg-amber-500" 
+                    : "bg-gradient-to-r from-orange-600 to-brand-accent"
+              )}
+              style={{ width: `${Math.min(occupancyPercentage, 100)}%` }}
+            />
+          </div>
+          
+          {isOverCapacity && (
+            <p className="text-[8px] text-rose-500 font-black uppercase tracking-wider pt-0.5 flex items-center gap-1.5 animate-pulse">
+              <AlertCircle size={10} />
+              ATENÇÃO: O total de passageiros no manifesto ({manifestCount}) excede a capacidade física limitadora deste veículo ({vehicleCapacity} lugares). Favor reescalar a frota ou reduzir passageiros.
+            </p>
+          )}
+
+          {!vehicle && (
+            <p className="text-[8px] text-amber-500 font-extrabold uppercase tracking-wider pt-0.5 leading-relaxed">
+              * Nenhum veículo foi escalado ainda para esta viagem. A capacidade total assumida é de 0 lugares. Vá em "Editar Viagem" para escalonar o ônibus correspondente.
+            </p>
+          )}
+        </div>
+      </div>
+
+      {/* Dynamic Route Map Visualization Section */}
+      <React.Suspense fallback={
+        <div className="w-full bg-zinc-950 border border-zinc-900 rounded-2xl p-8 flex flex-col items-center justify-center text-center text-zinc-500 my-4 shadow-xl space-y-3">
+          <Loader2 className="animate-spin text-orange-500" size={24} />
+          <p className="text-[10px] uppercase font-black tracking-widest text-zinc-500">Caregando Geovisualizador de Rota...</p>
+        </div>
+      }>
+        <RouteMap origin={trip.origin} destination={trip.destination} />
+      </React.Suspense>
+
+      {/* Linked Financial Transactions List Section */}
+      <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 shadow-xl no-print space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-zinc-800 pb-4">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-orange-500/10 flex items-center justify-center text-orange-500 shadow-inner">
+              <Coins size={18} />
+            </div>
+            <div>
+              <h3 className="text-xs font-black text-white uppercase tracking-widest leading-none mb-1">
+                Lançamentos Financeiros Vinculados
+              </h3>
+              <p className="text-[9px] text-zinc-500 font-bold uppercase tracking-wide">
+                Controle operacional de fluxo de caixa diretamente ligado a esta viagem
+              </p>
+            </div>
+          </div>
+          
+          <div className="flex items-center gap-2 mt-2 sm:mt-0">
+            <span className="text-[9px] font-black px-2.5 py-1 bg-zinc-800 text-zinc-400 rounded-lg uppercase">
+              Registros: {loadingTx ? '...' : linkedTransactions.length}
+            </span>
+            {!loadingTx && linkedTransactions.length > 0 && (
+              <span className="text-[9px] font-black px-2.5 py-1 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 rounded-lg uppercase">
+                Total Líquido: R$ {linkedTransactions.reduce((acc, t) => acc + (t.type === 'receivable' ? t.amount : -t.amount), 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+              </span>
+            )}
+          </div>
+        </div>
+
+        {loadingTx ? (
+          <div className="flex items-center justify-center py-8 text-zinc-500 gap-2">
+            <Loader2 size={16} className="animate-spin text-orange-500" />
+            <span className="text-[10px] font-black uppercase tracking-wider">
+              Carregando fluxo contábil...
+            </span>
+          </div>
+        ) : linkedTransactions.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-10 text-center text-zinc-550 space-y-1.5">
+            <Info size={24} className="text-zinc-700" />
+            <p className="text-[10px] font-black uppercase text-zinc-400 tracking-wider">
+              Nenhuma movimentação financeira vinculada
+            </p>
+            <p className="text-[9px] text-zinc-500 font-bold uppercase max-w-sm">
+              Transações geradas no faturamento do fretamento ou associadas pelo controle de caixa constarão aqui.
+            </p>
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse">
+              <thead>
+                <tr className="border-b border-zinc-800 text-[8px] font-black uppercase text-zinc-500 tracking-wide pb-2">
+                  <th className="pb-3 px-2">Descrição / Detalhe</th>
+                  <th className="pb-3 px-2">Categoria</th>
+                  <th className="pb-3 px-2 text-center">Tipo</th>
+                  <th className="pb-3 px-2">Vencimento</th>
+                  <th className="pb-3 px-2 text-right">Valor</th>
+                  <th className="pb-3 px-2 text-center">Status</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-zinc-850/40">
+                {linkedTransactions.map((tx) => (
+                  <tr key={tx.id} className="text-[10px] font-bold text-zinc-300 hover:bg-zinc-850/20 transition-colors">
+                    <td className="py-3 px-2">
+                      <div>
+                        <p className="font-black text-white uppercase">{tx.description}</p>
+                        {tx.observations && (
+                          <p className="text-[8px] text-zinc-500 mt-0.5 uppercase italic">{tx.observations}</p>
+                        )}
+                        {tx.refType && (
+                          <span className="text-[7.5px] font-black px-1.5 py-0.5 bg-zinc-800 text-zinc-400 border border-zinc-750 rounded uppercase inline-block mt-1">
+                            Ref: {tx.refType}
+                          </span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="py-3 px-2 uppercase text-[9px] text-zinc-400 font-extrabold">
+                      {tx.category.replace('_', ' ')}
+                    </td>
+                    <td className="py-3 px-2 text-center">
+                      {tx.type === 'receivable' ? (
+                        <span className="text-[8px] font-black px-2 py-0.5 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 rounded-lg uppercase inline-flex items-center gap-1">
+                          <TrendingUp size={10} />
+                          Receita
+                        </span>
+                      ) : (
+                        <span className="text-[8px] font-black px-2 py-0.5 bg-rose-500/10 border border-rose-500/20 text-rose-400 rounded-lg uppercase inline-flex items-center gap-1">
+                          <TrendingDown size={10} />
+                          Despesa
+                        </span>
+                      )}
+                    </td>
+                    <td className="py-3 px-2 font-mono text-zinc-400 text-[9px]">
+                      {tx.dueDate ? format(new Date(tx.dueDate + 'T12:00:00'), 'dd/MM/yyyy') : '---'}
+                    </td>
+                    <td className={cn(
+                      "py-3 px-2 text-right font-black tabular-nums text-[10.5px]",
+                      tx.type === 'receivable' ? 'text-emerald-400' : 'text-rose-400'
+                    )}>
+                      {tx.type === 'receivable' ? '+' : '-'} R$ {tx.amount.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                    </td>
+                    <td className="py-3 px-2 text-center">
+                      {tx.status === 'paid' ? (
+                        <span className="text-[8px] font-black px-2 py-0.5 bg-emerald-500 text-zinc-950 rounded-lg uppercase">
+                          Liquidado
+                        </span>
+                      ) : tx.status === 'pending' ? (
+                        <span className="text-[8px] font-black px-2 py-0.5 bg-amber-500/10 border border-amber-500/20 text-amber-500 rounded-lg uppercase">
+                          Pendente
+                        </span>
+                      ) : (
+                        <span className="text-[8px] font-black px-2 py-0.5 bg-rose-500/15 border border-rose-500/25 text-rose-400 rounded-lg uppercase">
+                          Atrasado
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
       {/* Simulated A4 Print Preview Sheet Container */}
       <div className="w-full overflow-x-auto py-4 bg-zinc-950/40 rounded-3xl border border-zinc-800 flex justify-center shadow-inner select-none lg:p-8">
         <div 
@@ -359,7 +662,7 @@ export const TripServiceOrder = ({ trip, vehicle, driver, secondDriver, onDelete
                    </div>
                  </div>
                  <p className="text-[7.5px] font-bold text-zinc-400 uppercase tracking-tight">PROP: GESTÃO DE FRETAMENTO E ROTAS DE VIAGEM</p>
-                 <p className="text-[7.5px] font-black text-zinc-800 uppercase tracking-tight leading-normal">GARAGEM OPERACIONAL DM • BRASIL / MERCOSUL</p>
+                 <p className="text-[7.5px] font-black text-zinc-800 uppercase tracking-tight leading-normal">GARAGEM OPERACIONAL DM TURISMO • BRASIL / MERCOSUL</p>
                </div>
                
                <div className="text-right flex flex-col justify-between h-full">
@@ -390,11 +693,17 @@ export const TripServiceOrder = ({ trip, vehicle, driver, secondDriver, onDelete
                   </div>
                 </div>
 
-                <div className="grid grid-cols-3 gap-4 mt-4 pt-4 border-t border-zinc-200/50">
+                <div className="grid grid-cols-4 gap-4 mt-4 pt-4 border-t border-zinc-200/50">
+                  <div>
+                    <h5 className="text-[7px] text-zinc-400 font-black uppercase tracking-widest leading-none mb-1">Cliente / Fretante</h5>
+                    <p className="text-[9px] font-black text-zinc-800 uppercase truncate" title={trip.client}>
+                      {trip.client || 'NÃO ESPECIFICADO'}
+                    </p>
+                  </div>
                   <div>
                     <h5 className="text-[7px] text-zinc-400 font-black uppercase tracking-widest leading-none mb-1">Percurso</h5>
                     <p className="text-[9px] font-black text-zinc-800 uppercase">
-                      {trip.tripType === 'mercosur' ? 'Merconul / Intl.' : trip.tripType === 'interstate' ? 'Interestadual' : 'Estadual'}
+                      {trip.tripType === 'mercosur' ? 'Mercosul / Intl.' : trip.tripType === 'interstate' ? 'Interestadual' : 'Estadual'}
                     </p>
                   </div>
                   <div>
@@ -452,20 +761,20 @@ export const TripServiceOrder = ({ trip, vehicle, driver, secondDriver, onDelete
                       <div>
                         <p className="text-[9px] text-zinc-500 font-medium leading-none mb-0.5">Motorista Principal</p>
                         <p className="text-[9.5px] font-black text-zinc-900 uppercase leading-none">
-                          {driver ? driver.name : 'SEM ESCALA PRINCIPAL'}
+                          {driver ? driver.name : (trip.driverId || 'SEM ESCALA PRINCIPAL')}
                         </p>
                         {driver?.cpf && <span className="text-[7.5px] text-zinc-500 font-bold block">CPF: {driver.cpf} • TEL: {driver.phone || '---'}</span>}
                       </div>
 
-                      {secondDriver && (
+                      {(secondDriver || trip.secondDriverId) && (
                         <div>
                           <p className="text-[8px] text-zinc-400 font-medium leading-none mb-0.5 flex items-center gap-1">
                             <CornerDownRight size={8} /> No Revezamento (Auxiliar)
                           </p>
                           <p className="text-[9px] font-bold text-zinc-700 uppercase leading-none">
-                            {secondDriver.name}
+                            {secondDriver ? secondDriver.name : trip.secondDriverId}
                           </p>
-                          {secondDriver.cpf && <span className="text-[7px] text-zinc-400 block font-medium">CPF: {secondDriver.cpf || '---'}</span>}
+                          {secondDriver?.cpf && <span className="text-[7px] text-zinc-400 block font-medium">CPF: {secondDriver.cpf || '---'}</span>}
                         </div>
                       )}
                     </div>
@@ -577,7 +886,7 @@ export const TripServiceOrder = ({ trip, vehicle, driver, secondDriver, onDelete
                   <div className="w-48 border-b border-zinc-400 mx-auto mb-2" />
                   <p className="text-[7px] text-zinc-400 font-medium text-center uppercase leading-none">ASSINATURA DO MOTORISTA RESPONSÁVEL</p>
                   <p className="text-[8px] text-zinc-750 font-black text-center mt-1 uppercase">
-                    {driver ? driver.name : 'DECLARAÇÃO DE RECEBIMENTO'}
+                    {driver ? driver.name : (trip.driverId || 'DECLARAÇÃO DE RECEBIMENTO')}
                   </p>
                </div>
                <div>

@@ -404,6 +404,154 @@
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["url", "title"]
+    },
+    "CharterClient": {
+      "title": "Charter Client",
+      "description": "Registered partner corporate or individual client profile for charter services",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "companyName": { "type": "string" },
+        "document": { "type": "string" },
+        "phone": { "type": "string" },
+        "email": { "type": "string" },
+        "address": { "type": "string" },
+        "notes": { "type": "string" },
+        "fixedRoutes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "name": { "type": "string" },
+              "schedule": { "type": "string" },
+              "driverId": { "type": "string" },
+              "vehicleId": { "type": "string" },
+              "daysOfWeek": {
+                "type": "array",
+                "items": { "type": "integer" }
+              }
+            }
+          }
+        },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name"]
+    },
+    "CharterClientTrip": {
+      "title": "Charter Client Trip",
+      "description": "Individual scheduled trips for client charters",
+      "type": "object",
+      "properties": {
+        "client": { "type": "string" },
+        "clientId": { "type": "string" },
+        "description": { "type": "string" },
+        "dateTime": { "type": "string", "format": "date-time" },
+        "origin": { "type": "string" },
+        "destination": { "type": "string" },
+        "value": { "type": "number" },
+        "driverId": { "type": "string" },
+        "vehicleId": { "type": "string" },
+        "status": { "type": "string" },
+        "paymentStatus": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["client", "dateTime"]
+    },
+    "UserDevice": {
+      "title": "User Device",
+      "description": "FCM tokens registered for user devices to handle push notification broadcasts",
+      "type": "object",
+      "properties": {
+        "token": { "type": "string" },
+        "userId": { "type": "string" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["token", "userId"]
+    },
+    "TireAlert": {
+      "title": "Tire Alert",
+      "description": "Custom alerts configured for specific tires",
+      "type": "object",
+      "properties": {
+        "itemId": { "type": "string" },
+        "itemName": { "type": "string" },
+        "alertType": { "type": "string" },
+        "thresholdValue": { "type": "string" },
+        "status": { "type": "string" },
+        "notes": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["itemId", "itemName", "alertType", "thresholdValue", "status", "createdAt"]
+    },
+    "TireDossier": {
+      "title": "Tire Dossier",
+      "description": "Technical dossier inspection line sheet for a single tire asset",
+      "type": "object",
+      "properties": {
+        "itemId": { "type": "string" },
+        "serialNumber": { "type": "string" },
+        "brandOption": { "type": "string" },
+        "dotCode": { "type": "string" },
+        "grooveDepth": { "type": "number" },
+        "currentVehicleId": { "type": "string" },
+        "currentVehiclePlate": { "type": "string" },
+        "wheelPosition": { "type": "string" },
+        "currentOdometer": { "type": "number" },
+        "status": { "type": "string" },
+        "auditorName": { "type": "string" },
+        "notes": { "type": "string" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["itemId", "serialNumber", "grooveDepth", "status", "updatedAt"]
+    },
+    "ProprietorTicket": {
+      "title": "Proprietor Ticket",
+      "description": "Service request and direct message tickets sent to the owner/proprietor",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "category": { "type": "string" },
+        "urgency": { "type": "string", "enum": ["low", "medium", "high"] },
+        "status": { "type": "string", "enum": ["pending", "in_progress", "resolved", "cancelled"] },
+        "createdByUid": { "type": "string" },
+        "createdByName": { "type": "string" },
+        "createdByEmail": { "type": "string" },
+        "createdByRole": { "type": "string" },
+        "vehicleId": { "type": "string" },
+        "replies": { "type": "array" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["title", "description", "category", "urgency", "status", "createdByUid", "createdByName", "createdByEmail", "createdAt"]
+    },
+    "StorageBackupLog": {
+      "title": "Storage Backup Log",
+      "description": "Logs of data backups performed to Firebase Storage",
+      "type": "object",
+      "properties": {
+        "timestamp": { "type": "string", "format": "date-time" },
+        "date": { "type": "string" },
+        "createdBy": { "type": "string" },
+        "paths": { "type": "array", "items": { "type": "string" } },
+        "formats": { "type": "array", "items": { "type": "string" } },
+        "collections": { "type": "array", "items": { "type": "string" } },
+        "success": { "type": "boolean" }
+      },
+      "required": ["timestamp", "date", "createdBy", "paths", "formats", "collections", "success"]
+    },
+    "UserLayout": {
+      "title": "User Layout",
+      "description": "Customizable dashboard widgets reordering preferences",
+      "type": "object",
+      "properties": {
+        "widgetOrder": { "type": "array", "items": { "type": "string" } },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["widgetOrder"]
     }
   },
   "firestore": {
@@ -420,6 +568,7 @@
     "financial_transactions": { "schema": "FinancialTransaction", "description": "Cash flow records" },
     "trips": { "schema": "Trip", "description": "Trip and transit records" },
     "backups": { "schema": "Backup", "description": "System database snapshots" },
+    "storage_backup_logs": { "schema": "StorageBackupLog", "description": "Logs of backups to Firebase Storage" },
     "audit_logs": { "schema": "AuditLog", "description": "Security and activity tracking" },
     "settings": { "schema": "DashboardSettings", "description": "Global application settings" },
     "dashboard_messages": { "schema": "DashboardMessage", "description": "Messages on the dashboard notice board" },
@@ -428,6 +577,13 @@
     "journeys": { "schema": "Journey", "description": "Employee time tracking logs" },
     "chartered_routes": { "schema": "CharteredRoute", "description": "Fixed recurring route management" },
     "featured_videos": { "schema": "FeaturedVideo", "description": "Videos featured on the dashboard" },
+    "charter_clients": { "schema": "CharterClient", "description": "Registered partner client profiles" },
+    "charter_client_trips": { "schema": "CharterClientTrip", "description": "Scheduled individual trip records for corporate services" },
+    "user_devices": { "schema": "UserDevice", "description": "Registered FCM tokens for push notifications" },
+    "tire_alerts": { "schema": "TireAlert", "description": "Tire threshold and alignment alerts" },
+    "tire_dossiers": { "schema": "TireDossier", "description": "Tire technical dossiers" },
+    "proprietor_tickets": { "schema": "ProprietorTicket", "description": "Support tickets and message requests directly addressed to the owner/proprietor" },
+    "users_layouts": { "schema": "UserLayout", "description": "Customizable dashboard widgets configuration per user" },
     "test": { "schema": { "type": "object", "properties": { "status": { "type": "string" } } }, "description": "Connection test collection" }
   }
 }

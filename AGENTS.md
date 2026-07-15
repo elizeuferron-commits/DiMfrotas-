@@ -9,5 +9,9 @@ O usuário estabeleceu um workflow de "Linha Paralela" para desenvolvimento:
 4. **Referência de Partida**: O arquivo `PONTO_DE_PARTIDA.md` serve como referência do estado estável inicial.
 
 ## 🎨 Diretrizes de Design
-- Seguir o padrão "DM Turismo": Dark mode (zinc-900/950), detalhes em `brand-accent` (#ff6b00) e tipografia em Inter.
+- Seguir o padrão "DM Turismo": Escopo visual baseado em branco, azul marinho (asphalt-900/950) e preto (zinc-900/950) como cores padrão do layout. Detalhes e destaques refinados em branco e tipografia em Inter.
 - Manter o estilo de botões e cards com cantos arredondados (rounded-2xl) e fontes uppercase para labels técnicas.
+
+## 🔒 Isolamento e Blindagem de Escopo (Scoping & Shielding)
+- **Mudança Direcionada**: Ao iniciar uma modificação com a especificação "na ferramenta [X]" (ou equivalente), as alterações devem ficar restritas exclusivamente à ferramenta ou módulo escolhido.
+- **Blindagem Contra Efeitos Colaterais**: Todas as outras ferramentas, componentes e coleções adjacentes devem ser totalmente blindados e protegidos contra modificações colaterais ou acidentais, preservando sua estabilidade e integridade funcional.

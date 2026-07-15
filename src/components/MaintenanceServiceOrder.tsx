@@ -15,30 +15,19 @@ import {
   Activity,
   DollarSign,
   Type,
-  FileCode
+  FileCode,
+  PenTool,
+  X
 } from 'lucide-react';
+
 import { MaintenanceLog, Vehicle } from '../types';
 import { format, parseISO } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { Button } from './UI';
 import { toast } from 'sonner';
-import html2canvas from 'html2canvas';
-import jsPDF from 'jspdf';
-import autoTable from 'jspdf-autotable';
-import { 
-  Document, 
-  Packer, 
-  Paragraph, 
-  TextRun, 
-  Table, 
-  TableRow, 
-  TableCell, 
-  WidthType, 
-  AlignmentType,
-  HeadingLevel,
-} from 'docx';
-import { saveAs } from 'file-saver';
 import { cn } from '../lib/utils';
+import { SignaturePad } from './SignaturePad';
+
 
 interface MaintenanceServiceOrderProps {
   log: MaintenanceLog;
@@ -47,7 +36,11 @@ interface MaintenanceServiceOrderProps {
 
 export const MaintenanceServiceOrder = ({ log, vehicle }: MaintenanceServiceOrderProps) => {
   const [isGenerating, setIsGenerating] = useState(false);
+  const [driverSignature, setDriverSignature] = useState<string | null>(null);
+  const [showSignaturePad, setShowSignaturePad] = useState(false);
+  const [isReadMode, setIsReadMode] = useState(false);
   const orderRef = useRef<HTMLDivElement>(null);
+
 
   const handlePrint = () => {
     window.print();
@@ -57,6 +50,8 @@ export const MaintenanceServiceOrder = ({ log, vehicle }: MaintenanceServiceOrde
     if (!orderRef.current) return;
     setIsGenerating(true);
     try {
+      const html2canvas = (await import('html2canvas')).default;
+      const jsPDF = (await import('jspdf')).default;
       const osNum = log.id?.substring(0, 8).toUpperCase() || 'NEW';
       const canvas = await html2canvas(orderRef.current, {
         scale: 2,
@@ -86,9 +81,11 @@ export const MaintenanceServiceOrder = ({ log, vehicle }: MaintenanceServiceOrde
     }
   };
 
-  const handleDownloadTextPDF = () => {
+  const handleDownloadTextPDF = async () => {
     setIsGenerating(true);
     try {
+      const jsPDF = (await import('jspdf')).default;
+      const autoTable = (await import('jspdf-autotable')).default;
       const pdf = new jsPDF();
       const osNum = log.id?.substring(0, 8).toUpperCase() || 'NEW';
       const margin = 15;
@@ -178,6 +175,11 @@ export const MaintenanceServiceOrder = ({ log, vehicle }: MaintenanceServiceOrde
   const handleDownloadWord = async () => {
     setIsGenerating(true);
     try {
+        const docx = await import('docx');
+        const fileSaver = await import('file-saver');
+        const saveAs = fileSaver.saveAs;
+        const { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, WidthType, AlignmentType, HeadingLevel } = docx;
+
         const osNum = log.id?.substring(0, 8).toUpperCase() || 'NEW';
         const doc = new Document({
             sections: [{
@@ -285,52 +287,82 @@ export const MaintenanceServiceOrder = ({ log, vehicle }: MaintenanceServiceOrde
   return (
     <div className="space-y-6">
       {/* Action Bar */}
-      <div className="flex flex-wrap items-center justify-end gap-3 no-print p-4 bg-zinc-900 border border-zinc-800 rounded-3xl shadow-2xl">
-        <div className="flex-1 flex items-center gap-4 px-4 border-r border-zinc-800">
-          <div className="w-10 h-10 rounded-2xl bg-amber-500/10 flex items-center justify-center text-amber-500">
-            <Wrench size={20} />
+      {!isReadMode && (
+        <div className="flex flex-wrap items-center justify-end gap-3 no-print p-4 bg-zinc-900 border border-zinc-800 rounded-3xl shadow-2xl">
+          <div className="flex-1 flex items-center gap-4 px-4 border-r border-zinc-800">
+            <div className="w-10 h-10 rounded-2xl bg-amber-500/10 flex items-center justify-center text-amber-500">
+              <Wrench size={20} />
+            </div>
+            <div>
+              <p className="text-[10px] font-black text-zinc-500 uppercase tracking-widest leading-none mb-1">Manutenção Técnica</p>
+              <p className="text-sm font-black text-white uppercase tracking-tight">Relatório de Serviço Mecânico</p>
+            </div>
           </div>
-          <div>
-            <p className="text-[10px] font-black text-zinc-500 uppercase tracking-widest leading-none mb-1">Manutenção Técnica</p>
-            <p className="text-sm font-black text-white uppercase tracking-tight">Relatório de Serviço Mecânico</p>
-          </div>
+
+          <Button 
+            variant="secondary"
+            onClick={() => setIsReadMode(true)}
+            className="gap-2 bg-zinc-800 text-zinc-400 hover:text-white border-zinc-700 h-12 px-6 rounded-2xl"
+          >
+            <FileText size={18} />
+            MODO LEITURA
+          </Button>
+
+          <Button 
+            variant="secondary"
+            onClick={handleDownloadTextPDF} 
+            disabled={isGenerating}
+            className="gap-2 bg-asphalt-800 text-zinc-400 hover:text-white border-asphalt-700 h-12 px-6 rounded-2xl"
+          >
+            {isGenerating ? <Loader2 size={18} className="animate-spin" /> : <Type size={18} />}
+            PDF (TEXTO)
+          </Button>
+
+          <Button 
+            variant="secondary"
+            onClick={handleDownloadWord} 
+            disabled={isGenerating}
+            className="gap-2 bg-blue-500/10 text-blue-400 hover:bg-blue-500 hover:text-white border-blue-500/20 h-12 px-6 rounded-2xl"
+          >
+            {isGenerating ? <Loader2 size={18} className="animate-spin" /> : <FileCode size={18} />}
+            WORD
+          </Button>
+
+          <Button 
+            variant="secondary"
+            onClick={handleDownloadPDF} 
+            disabled={isGenerating}
+            className="gap-2 bg-zinc-100 text-zinc-950 hover:bg-zinc-200 border-zinc-200 h-12 px-6 rounded-2xl"
+          >
+            {isGenerating ? <Loader2 size={18} className="animate-spin" /> : <FileDown size={18} />}
+            PDF (LAYOUT)
+          </Button>
+
+          <Button onClick={handlePrint} disabled={isGenerating} className="gap-2 h-12 px-6 rounded-2xl bg-amber-500 text-zinc-950 hover:bg-white border-amber-500 transition-all font-black">
+            <Printer size={18} />
+            IMPRIMIR RELATÓRIO
+          </Button>
+          <Button onClick={() => setShowSignaturePad(true)} className="gap-2 h-12 px-6 rounded-2xl bg-zinc-800 text-white hover:bg-zinc-700 transition-all font-black">
+            <PenTool size={18} />
+            ASSINAR
+          </Button>
         </div>
+      )}
 
-        <Button 
-          variant="secondary"
-          onClick={handleDownloadTextPDF} 
-          disabled={isGenerating}
-          className="gap-2 bg-asphalt-800 text-zinc-400 hover:text-white border-asphalt-700 h-12 px-6 rounded-2xl"
+      {/* Exit Read Mode floating button */}
+      {isReadMode && (
+        <button 
+          onClick={() => setIsReadMode(false)}
+          className="fixed top-6 right-6 z-[60] bg-zinc-900 text-white p-4 rounded-full shadow-2xl hover:bg-zinc-700 transition-all"
         >
-          {isGenerating ? <Loader2 size={18} className="animate-spin" /> : <Type size={18} />}
-          PDF (TEXTO)
-        </Button>
+          <X size={24} />
+        </button>
+      )}
 
-        <Button 
-          variant="secondary"
-          onClick={handleDownloadWord} 
-          disabled={isGenerating}
-          className="gap-2 bg-blue-500/10 text-blue-400 hover:bg-blue-500 hover:text-white border-blue-500/20 h-12 px-6 rounded-2xl"
-        >
-          {isGenerating ? <Loader2 size={18} className="animate-spin" /> : <FileCode size={18} />}
-          WORD
-        </Button>
-
-        <Button 
-          variant="secondary"
-          onClick={handleDownloadPDF} 
-          disabled={isGenerating}
-          className="gap-2 bg-zinc-100 text-zinc-950 hover:bg-zinc-200 border-zinc-200 h-12 px-6 rounded-2xl"
-        >
-          {isGenerating ? <Loader2 size={18} className="animate-spin" /> : <FileDown size={18} />}
-          PDF (LAYOUT)
-        </Button>
-
-        <Button onClick={handlePrint} disabled={isGenerating} className="gap-2 h-12 px-6 rounded-2xl bg-amber-500 text-zinc-950 hover:bg-white border-amber-500 transition-all font-black">
-          <Printer size={18} />
-          IMPRIMIR RELATÓRIO
-        </Button>
-      </div>
+      {/* Signature Section */}
+      {showSignaturePad && !driverSignature && (
+        <SignaturePad onSignatureConfirmed={(data) => { setDriverSignature(data); setShowSignaturePad(false); }} />
+      )}
 
       {/* Document Container */}
       <div 
@@ -513,8 +545,12 @@ export const MaintenanceServiceOrder = ({ log, vehicle }: MaintenanceServiceOrde
                  <p className="text-[8px] font-bold text-zinc-400 uppercase tracking-widest">Assinatura Certificada</p>
               </div>
               <div className="text-center group">
-                 <div className="w-full h-0.5 bg-zinc-200 mb-6 group-hover:bg-zinc-900 transition-colors" />
-                 <p className="text-[11px] font-black uppercase tracking-widest text-zinc-900 mb-1">Responsável pela Frota</p>
+                 {driverSignature ? (
+                    <img src={driverSignature} alt="Assinatura do Motorista" className="h-20 mx-auto" />
+                 ) : (
+                    <div className="w-full h-0.5 bg-zinc-200 mb-6 group-hover:bg-zinc-900 transition-colors" />
+                 )}
+                 <p className="text-[11px] font-black uppercase tracking-widest text-zinc-900 mb-1">Assinatura do Motorista</p>
                  <p className="text-[8px] font-bold text-zinc-400 uppercase tracking-widest">Validação Administrativa</p>
               </div>
             </div>

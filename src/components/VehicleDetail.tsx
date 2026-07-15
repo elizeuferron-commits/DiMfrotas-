@@ -1,4 +1,5 @@
 import React, { useState, useEffect, memo, useMemo } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
 import { 
   Bus, 
   Wrench, 
@@ -24,19 +25,22 @@ import {
   TrendingUp,
   FileSpreadsheet,
   Globe,
-  Map as MapIcon
+  X,
+  Map as MapIcon,
+  FileText
 } from 'lucide-react';
-import { Vehicle, MaintenanceLog, FuelLog, Checklist, Employee, OperationType, Trip } from '../types';
+import { Vehicle, MaintenanceLog, FuelLog, Checklist, Employee, OperationType, Trip, VehiclePreventiveKMRoute } from '../types';
 import { format, parseISO, startOfMonth, differenceInDays, isBefore, isAfter } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { cn } from '../lib/utils';
 import { Modal, ConfirmModal } from './UI';
 import { ChecklistForm } from './ChecklistDrawer';
-import { collection, addDoc, onSnapshot, query, where, orderBy, doc, deleteDoc, updateDoc } from 'firebase/firestore';
-import { db } from '../lib/firebase';
+import { MaintenanceForm } from './MaintenanceForm';
+import { collection, addDoc, onSnapshot, query, where, orderBy, doc, deleteDoc, updateDoc, getDocs } from 'firebase/firestore';
+import { db, handleFirestoreError } from '../lib/firebase';
 import { toast } from 'sonner';
-import jsPDF from 'jspdf';
-import autoTable from 'jspdf-autotable';
+import { getAuth } from 'firebase/auth';
+import { auditService } from '../services/auditService';
 
 const getWarrantyStatus = (vehicle: Vehicle) => {
   const currentYear = new Date().getFullYear();
@@ -94,6 +98,7 @@ import {
 
 interface VehicleDetailProps {
   vehicle: Vehicle;
+  vehicles?: Vehicle[];
   maintenanceHistory: MaintenanceLog[];
   fuelHistory: FuelLog[];
   employees: Employee[];
@@ -104,10 +109,34 @@ interface VehicleDetailProps {
   onDeleteMaintenance?: (id: string) => void;
   onPrintOS: (log: MaintenanceLog) => void;
   onDelete?: () => void;
+  onSold?: () => void;
+  onSaveMaintenance?: (data: any) => Promise<void>;
+  isSavingMaintenance?: boolean;
+  onAddTrip?: (vehicleId: string) => void;
+  onAddFuel?: (vehicleId: string) => void;
 }
 
-export const VehicleDetail = memo(({ vehicle, maintenanceHistory, fuelHistory, employees, trips = [], onEdit, onAddMaintenance, onEditMaintenance, onDeleteMaintenance, onPrintOS, onDelete }: VehicleDetailProps) => {
-  const [activeTab, setActiveTab] = useState<'overview' | 'maintenance' | 'fuel' | 'charts' | 'checklists'>('overview');
+export const VehicleDetail = memo(({ 
+  vehicle, 
+  vehicles = [], 
+  maintenanceHistory, 
+  fuelHistory, 
+  employees, 
+  trips = [], 
+  onEdit, 
+  onAddMaintenance, 
+  onEditMaintenance, 
+  onDeleteMaintenance, 
+  onPrintOS, 
+  onDelete,
+  onSold,
+  onSaveMaintenance,
+  isSavingMaintenance,
+  onAddTrip,
+  onAddFuel
+}: VehicleDetailProps) => {
+  const [activeOverlayTab, setActiveOverlayTab] = useState<'overview' | 'maintenance' | 'checklists' | 'charts' | null>(null);
+  const [innerMaintenanceForm, setInnerMaintenanceForm] = useState<{ isOpen: boolean; initialData: any } | null>(null);
   const [checklists, setChecklists] = useState<Checklist[]>([]);
   const [isChecklistModalOpen, setIsChecklistModalOpen] = useState(false);
   const [isSubmiting, setIsSubmiting] = useState(false);
@@ -116,6 +145,207 @@ export const VehicleDetail = memo(({ vehicle, maintenanceHistory, fuelHistory, e
     id: '',
     type: 'fuel'
   });
+  const [soldConfirmOpen, setSoldConfirmOpen] = useState(false);
+  const [isMarkingAsSold, setIsMarkingAsSold] = useState(false);
+  
+  const [isEditingSchedule, setIsEditingSchedule] = useState(false);
+  const [editNextOilKM, setEditNextOilKM] = useState<string>('');
+  const [editNextMaintDate, setEditNextMaintDate] = useState<string>('');
+  const [isSavingSchedule, setIsSavingSchedule] = useState(false);
+
+  // States for KM-based preventive maintenance routes
+  const [isAddingRoute, setIsAddingRoute] = useState(false);
+  const [newRouteTemplate, setNewRouteTemplate] = useState('custom');
+  const [newRouteName, setNewRouteName] = useState('');
+  const [newRouteInterval, setNewRouteInterval] = useState('');
+  const [newRouteLastKM, setNewRouteLastKM] = useState(String(vehicle.currentOdometer || 0));
+  const [isSavingRoute, setIsSavingRoute] = useState(false);
+
+  // Synchronize new route starting KM when vehicle updates
+  useEffect(() => {
+    if (!isAddingRoute) {
+      setNewRouteLastKM(String(vehicle.currentOdometer || 0));
+    }
+  }, [vehicle.currentOdometer, isAddingRoute]);
+
+  const handleAddRoute = async () => {
+    const finalTemplateName = newRouteTemplate !== 'custom' ? newRouteTemplate : newRouteName;
+    if (!finalTemplateName || finalTemplateName.trim() === '') {
+      toast.error('Informe o nome da rota de manutenção.');
+      return;
+    }
+    const intervalNum = Number(newRouteInterval);
+    if (!intervalNum || intervalNum <= 0) {
+      toast.error('Informe um intervalo em KM válido (maior que zero).');
+      return;
+    }
+    const lastKMNum = Number(newRouteLastKM || 0);
+
+    try {
+      setIsSavingRoute(true);
+      const vehicleRef = doc(db, 'vehicles', vehicle.id);
+      
+      const newRoute: VehiclePreventiveKMRoute = {
+        id: crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 11),
+        routeName: finalTemplateName.trim(),
+        kmInterval: intervalNum,
+        lastKM: lastKMNum,
+        nextDueKM: lastKMNum + intervalNum
+      };
+
+      const currentRoutes = vehicle.preventiveKMConfig || [];
+      const updatedRoutes = [...currentRoutes, newRoute];
+
+      await updateDoc(vehicleRef, {
+        preventiveKMConfig: updatedRoutes
+      });
+
+      // Audit logs
+      try {
+        const auth = getAuth();
+        const user = auth.currentUser;
+        await addDoc(collection(db, 'shadow_logs'), {
+          timestamp: new Date().toISOString(),
+          actor: user?.email || 'sistema',
+          action: 'Configuração de Rota de Manutenção Preventiva (KM)',
+          details: `Adicionou a rota preventiva "${newRoute.routeName}" (A cada ${newRoute.kmInterval.toLocaleString()} KM) para o veículo de placa ${vehicle.plate}.`,
+          type: 'INFO'
+        });
+      } catch (logErr) {
+        console.error('Erro ao registrar shadow log:', logErr);
+      }
+
+      toast.success('Nova rota preventiva configurada com sucesso!');
+      setIsAddingRoute(false);
+      setNewRouteName('');
+      setNewRouteTemplate('custom');
+      setNewRouteInterval('');
+      setNewRouteLastKM(String(vehicle.currentOdometer || 0));
+    } catch (error) {
+      console.error('Erro ao configurar nova rota:', error);
+      toast.error('Erro ao configurar nova rota.');
+    } finally {
+      setIsSavingRoute(false);
+    }
+  };
+
+  const handleDeleteRoute = async (routeId: string) => {
+    try {
+      const vehicleRef = doc(db, 'vehicles', vehicle.id);
+      const currentRoutes = vehicle.preventiveKMConfig || [];
+      const updatedRoutes = currentRoutes.filter(r => r.id !== routeId);
+
+      await updateDoc(vehicleRef, {
+        preventiveKMConfig: updatedRoutes
+      });
+
+      // Audit logs
+      try {
+        const auth = getAuth();
+        const user = auth.currentUser;
+        await addDoc(collection(db, 'shadow_logs'), {
+          timestamp: new Date().toISOString(),
+          actor: user?.email || 'sistema',
+          action: 'Remoção de Rota de Manutenção Preventiva (KM)',
+          details: `Removeu uma rota de manutenção preventiva do veículo ${vehicle.plate}.`,
+          type: 'INFO'
+        });
+      } catch (logErr) {
+        console.error('Erro ao registrar shadow log:', logErr);
+      }
+
+      toast.success('Rota de manutenção removida com sucesso.');
+    } catch (error) {
+      console.error('Erro ao remover rota:', error);
+      toast.error('Erro ao remover rota.');
+    }
+  };
+
+  const handleResetRoute = async (routeId: string) => {
+    try {
+      const vehicleRef = doc(db, 'vehicles', vehicle.id);
+      const currentRoutes = vehicle.preventiveKMConfig || [];
+      const currentOdo = vehicle.currentOdometer || 0;
+
+      const updatedRoutes = currentRoutes.map(r => {
+        if (r.id === routeId) {
+          return {
+            ...r,
+            lastKM: currentOdo,
+            nextDueKM: currentOdo + r.kmInterval
+          };
+        }
+        return r;
+      });
+
+      await updateDoc(vehicleRef, {
+        preventiveKMConfig: updatedRoutes
+      });
+
+      // Register shadow log
+      try {
+        const auth = getAuth();
+        const user = auth.currentUser;
+        await addDoc(collection(db, 'shadow_logs'), {
+          timestamp: new Date().toISOString(),
+          actor: user?.email || 'sistema',
+          action: 'Execução de Rota Preventiva (KM)',
+          details: `Reiniciou e marcou como realizada uma rota preventiva no veículo ${vehicle.plate}.`,
+          type: 'INFO'
+        });
+      } catch (logErr) {
+        console.error('Erro ao registrar shadow log:', logErr);
+      }
+
+      toast.success('Rota reiniciada! Progresso redefinido para 0%.');
+    } catch (error) {
+      console.error('Erro ao reiniciar rota:', error);
+      toast.error('Erro ao reiniciar rota.');
+    }
+  };
+
+  useEffect(() => {
+    setEditNextOilKM(vehicle.nextOilChangeKM ? String(vehicle.nextOilChangeKM) : '');
+    setEditNextMaintDate(vehicle.nextPreventiveMaintenanceDate || '');
+  }, [vehicle]);
+
+  const handleSaveSchedule = async () => {
+    try {
+      setIsSavingSchedule(true);
+      const vehicleRef = doc(db, 'vehicles', vehicle.id);
+      
+      const parsedKM = editNextOilKM === '' ? null : Number(editNextOilKM);
+      const parsedDate = editNextMaintDate === '' ? null : editNextMaintDate;
+
+      await updateDoc(vehicleRef, {
+        nextOilChangeKM: parsedKM,
+        nextPreventiveMaintenanceDate: parsedDate
+      });
+
+      try {
+        const auth = getAuth();
+        const user = auth.currentUser;
+        await auditService.log(
+          user?.uid || 'system',
+          user?.email || 'system',
+          'UPDATE',
+          'VEHICLE',
+          vehicle.id,
+          `Atualizou cronograma de manutenção do veículo ${vehicle.plate}. Próximo Óleo: ${parsedKM ? parsedKM + ' KM' : 'N/D'}, Próxima Preventiva: ${parsedDate ? format(parseISO(parsedDate), 'dd/MM/yyyy') : 'N/D'}`
+        );
+      } catch (auditErr) {
+        console.error('Erro ao registrar auditoria de cronograma:', auditErr);
+      }
+
+      toast.success('Cronograma e vencimentos salvos com sucesso!');
+      setIsEditingSchedule(false);
+    } catch (err) {
+      console.error('Erro ao salvar cronograma do veículo:', err);
+      toast.error('Erro ao salvar cronograma do veículo.');
+    } finally {
+      setIsSavingSchedule(false);
+    }
+  };
 
   useEffect(() => {
     const q = query(
@@ -130,7 +360,7 @@ export const VehicleDetail = memo(({ vehicle, maintenanceHistory, fuelHistory, e
         ...doc.data()
       })) as Checklist[];
       setChecklists(data);
-    });
+    }, error => handleFirestoreError(error, OperationType.LIST, 'checklists'));
 
     return () => unsubscribe();
   }, [vehicle.id]);
@@ -144,7 +374,11 @@ export const VehicleDetail = memo(({ vehicle, maintenanceHistory, fuelHistory, e
         await deleteDoc(doc(db, 'fuel_logs', id));
         toast.success('Abastecimento removido.');
       } else if (type === 'maintenance') {
-        await deleteDoc(doc(db, 'maintenance_history', id));
+        if (onDeleteMaintenance) {
+          onDeleteMaintenance(id);
+        } else {
+          await deleteDoc(doc(db, 'maintenance_logs', id));
+        }
         toast.success('Manutenção removida.');
       } else if (type === 'checklist') {
         await deleteDoc(doc(db, 'checklists', id));
@@ -154,6 +388,34 @@ export const VehicleDetail = memo(({ vehicle, maintenanceHistory, fuelHistory, e
       toast.error('Erro ao excluir item.');
     } finally {
       setDeleteConfirm(prev => ({ ...prev, isOpen: false }));
+    }
+  };
+
+  const processMarkAsSold = async () => {
+    setIsMarkingAsSold(true);
+    try {
+      const auth = getAuth();
+      const user = auth.currentUser;
+      await updateDoc(doc(db, 'vehicles', vehicle.id), {
+        status: 'sold',
+        updatedAt: new Date().toISOString()
+      });
+      await auditService.log(
+        user?.uid || 'system',
+        user?.email || 'system',
+        'UPDATE',
+        'VEHICLE',
+        vehicle.id,
+        `Veículo ${vehicle.plate} marcado como vendido`
+      );
+      toast.success(`Veículo ${vehicle.plate} marcado como vendido!`);
+      setSoldConfirmOpen(false);
+      onSold?.();
+    } catch (error) {
+      console.error("Erro ao marcar veículo como vendido:", error);
+      toast.error('Erro ao marcar veículo como vendido.');
+    } finally {
+      setIsMarkingAsSold(false);
     }
   };
 
@@ -192,7 +454,7 @@ export const VehicleDetail = memo(({ vehicle, maintenanceHistory, fuelHistory, e
             photoUrl: reader.result as string,
             updatedAt: new Date().toISOString()
           });
-          toast.success('Foto do veículo atualizada!');
+          toast.success('Foto do veículo updated!');
         } catch (error) {
           toast.error('Erro ao salvar foto.');
         }
@@ -229,190 +491,468 @@ export const VehicleDetail = memo(({ vehicle, maintenanceHistory, fuelHistory, e
 
   const vehicleMaintenance = maintenanceHistory
     .filter(m => m.vehicleId === vehicle.id)
-    .sort((a, b) => new Date(b.scheduledDate).getTime() - new Date(a.scheduledDate).getTime());
+    .sort((a, b) => {
+      // Pending always first
+      if (a.status === 'pending' && b.status !== 'pending') return -1;
+      if (a.status !== 'pending' && b.status === 'pending') return 1;
+
+      // If both are pending, sort ascending by scheduledDate (closest upcoming first)
+      if (a.status === 'pending' && b.status === 'pending') {
+        return new Date(a.scheduledDate).getTime() - new Date(b.scheduledDate).getTime();
+      }
+
+      // If both are completed, sort descending by completedAt or scheduledDate (most recent first)
+      const dateA = a.completedAt || a.scheduledDate;
+      const dateB = b.completedAt || b.scheduledDate;
+      return new Date(dateB).getTime() - new Date(dateA).getTime();
+    });
 
   const vehicleFuel = fuelHistory
     .filter(f => f.vehicleId === vehicle.id)
     .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
 
-  const handleDownloadTechnicalMaintenanceReport = () => {
+  const odometerData = useMemo(() => {
+    const chronologicalFuel = [...vehicleFuel].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+
+    const list = chronologicalFuel.map((f, index) => {
+      const prev = index > 0 ? chronologicalFuel[index - 1] : null;
+      const kmTraveled = (prev && f.odometer > prev.odometer) ? f.odometer - prev.odometer : null;
+      const dateStr = f.timestamp ? format(parseISO(f.timestamp), 'dd/MM/yy', { locale: ptBR }) : '---';
+      return {
+        ...f,
+        date: dateStr,
+        kmTraveled,
+        prevOdometer: prev?.odometer || 0,
+      };
+    });
+
+    const validRuns = list.filter(item => item.kmTraveled !== null && item.kmTraveled > 0);
+    const avgKmBetween = validRuns.length > 0 
+      ? Math.round(validRuns.reduce((sum, item) => sum + (item.kmTraveled || 0), 0) / validRuns.length) 
+      : 0;
+
+    const maxKmBetween = validRuns.length > 0
+      ? Math.max(...validRuns.map(item => item.kmTraveled || 0))
+      : 0;
+
+    return {
+      history: list,
+      validRuns,
+      average: avgKmBetween,
+      max: maxKmBetween,
+      totalKmFromRefuel: validRuns.reduce((sum, item) => sum + (item.kmTraveled || 0), 0),
+    };
+  }, [vehicleFuel]);
+
+  const handleDownloadTechnicalMaintenanceReport = async () => {
     try {
+      const jsPDF = (await import('jspdf')).default;
+      const autoTable = (await import('jspdf-autotable')).default;
       const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
       
+      // Fetch financial transactions to look for fines linked to this vehicle
+      let vehicleFines: any[] = [];
+      try {
+        const finSnap = await getDocs(collection(db, 'financial_transactions'));
+        const allFinance = finSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }) as any);
+        
+        vehicleFines = allFinance.filter(tx => {
+          const isFine = tx.category?.toLowerCase().includes('multa') || 
+                         tx.description?.toLowerCase().includes('multa');
+                         
+          const isLinkedToVehicle = tx.refId === vehicle.id || 
+                                    tx.description?.toLowerCase().includes(vehicle.plate.toLowerCase().replace(/\s/g, '')) ||
+                                    tx.description?.toLowerCase().includes(vehicle.plate.toLowerCase());
+                                    
+          return isFine && isLinkedToVehicle;
+        });
+      } catch (err) {
+        console.warn('Erro ao carregar multas do Firestore:', err);
+      }
+
+      // Find recurrent scaled drivers from trips
+      const driverIds = new Set<string>();
+      trips.forEach(t => {
+        if (t.vehicleId === vehicle.id && t.status !== 'cancelled') {
+          if (t.driverId) driverIds.add(t.driverId);
+          if (t.secondDriverId) driverIds.add(t.secondDriverId);
+        }
+      });
+      const vehicleDrivers = employees.filter(emp => driverIds.has(emp.id));
+
       // DM Turismo Branding Header
-      doc.setFillColor(24, 24, 27); // Dark zinc/black header bar
+      doc.setFillColor(15, 23, 42); // Slate-900 / Navy Blue theme
       doc.rect(0, 0, 210, 38, 'F');
       
       doc.setFont('helvetica', 'bold');
       doc.setFontSize(22);
-      doc.setTextColor(255, 107, 0); // brand-accent (#ff6b00) - DM Turismo theme
+      doc.setTextColor(26, 80, 241); // brand-accent
       doc.text('DM TURISMO', 14, 18);
       
       doc.setFontSize(8);
       doc.setTextColor(161, 161, 170); // zinc-400
       doc.setFont('helvetica', 'normal');
-      doc.text('GESTÃO DE ATIVOS & ENGENHARIA DE FROTA', 14, 24);
-      doc.text('Ficha Técnica de Manutenção e Histórico Integrado', 14, 28);
+      doc.text('SISTEMA INTEGRADO DE ENGENHARIA E CONFORMIDADE DE FROTA', 14, 24);
+      doc.text('Dossiê Técnico Consolidado do Ativo - Histórico e Auditoria Geral', 14, 28);
       
       doc.setFontSize(11);
       doc.setTextColor(255, 255, 255);
       doc.setFont('helvetica', 'bold');
-      doc.text('RELATÓRIO TÉCNICO', 196, 18, { align: 'right' });
+      doc.text('DOSSIÊ COMPLETO', 196, 18, { align: 'right' });
       
       doc.setFontSize(8);
       doc.setTextColor(161, 161, 170); // zinc-400
       doc.setFont('helvetica', 'normal');
-      doc.text(`PLACA: ${vehicle.plate.toUpperCase()}`, 196, 24, { align: 'right' });
+      doc.text(`ATIVO: ${vehicle.plate.toUpperCase()}`, 196, 24, { align: 'right' });
       doc.text(`GERADO EM: ${format(new Date(), 'dd/MM/yyyy HH:mm', { locale: ptBR })}`, 196, 28, { align: 'right' });
       
-      // Orange thin separator under header
-      doc.setFillColor(255, 107, 0); // brand-accent
+      // Royal blue thin separator under header
+      doc.setFillColor(26, 80, 241); // brand-accent
       doc.rect(0, 36, 210, 2, 'F');
       
       // Reset text color to default
-      doc.setTextColor(24, 24, 27);
+      doc.setTextColor(15, 23, 42);
       
       // 1. Dados do Veículo
       doc.setFontSize(11);
       doc.setFont('helvetica', 'bold');
-      doc.text('1. DADOS CADASTRAIS DO ATIVO', 14, 48);
+      doc.text('1. DADOS CADASTRAIS DO VEÍCULO', 14, 48);
       
       const vehicleDetails = [
         ['Modelo / Veículo:', vehicle.model.toUpperCase(), 'Placa:', vehicle.plate.toUpperCase()],
-        ['Tipo de Ativo:', vehicle.type === 'bus' ? 'ÔNIBUS' : 'VAN', 'Capacidade:', `${vehicle.capacity || '--'} PASSAGEIROS`],
-        ['Odômetro Atual:', `${vehicle.currentOdometer?.toLocaleString() || '0'} KM`, 'Ano Fabricação:', vehicle.factoryYear || 'NÃO CONFIGURADO']
+        ['Tipo de Ativo:', vehicle.type === 'bus' ? 'ÔNIBUS' : vehicle.type === 'microbus' ? 'MICRO-ÔNIBUS' : 'VAN', 'Capacidade:', `${vehicle.capacity || '--'} PASSAGEIROS`],
+        ['Odômetro Atual:', `${vehicle.currentOdometer?.toLocaleString('pt-BR') || '0'} KM`, 'Ano Fabricação:', vehicle.factoryYear || 'NÃO CONFIGURADO'],
+        ['Status Operacional:', vehicle.status === 'available' ? 'DISPONÍVEL' : vehicle.status === 'maintenance' ? 'EM MANUTENÇÃO' : vehicle.status === 'trip' ? 'EM VIAGEM' : 'VENDIDO', 'Garantia:', getWarrantyStatus(vehicle).status]
       ];
       
       autoTable(doc, {
-        startY: 51,
+        startY: 52,
         body: vehicleDetails,
         theme: 'plain',
         bodyStyles: { fontSize: 8.5, textColor: [39, 39, 42], fontStyle: 'normal' },
         columnStyles: {
-          0: { fontStyle: 'bold', cellWidth: 32, textColor: [113, 113, 122] },
-          1: { cellWidth: 68 },
-          2: { fontStyle: 'bold', cellWidth: 28, textColor: [113, 113, 122] },
-          3: { cellWidth: 52 }
+          0: { fontStyle: 'bold', cellWidth: 35, textColor: [113, 113, 122] },
+          1: { cellWidth: 65 },
+          2: { fontStyle: 'bold', cellWidth: 30, textColor: [113, 113, 122] },
+          3: { cellWidth: 50 }
         },
         margin: { left: 14, right: 14 }
       });
       
       let nextY = (doc as any).lastAutoTable.finalY + 8;
       
-      // 2. Resumo da Garantia & Indicadores Financeiros
+      // 2. Documentação Obrigatória
       doc.setFontSize(11);
       doc.setFont('helvetica', 'bold');
-      doc.text('2. STATUS DE GARANTIA & INDICADORES FINANCEIROS', 14, nextY);
+      doc.text('2. CONTROLE DE DOCUMENTAÇÃO OBRIGATÓRIA (LICENCIAMENTO / REGULADORES)', 14, nextY);
       
-      // Calculate warranty status
-      const warranty = getWarrantyStatus(vehicle);
+      const today = new Date();
       
-      // Calculate statistics
-      const totalCosts = vehicleMaintenance.reduce((sum, m) => sum + (m.cost || 0), 0);
-      const preventiveLogs = vehicleMaintenance.filter(m => m.type === 'preventive');
-      const correctiveLogs = vehicleMaintenance.filter(m => m.type === 'corrective');
-      const pendingLogs = vehicleMaintenance.filter(m => m.status === 'pending');
-      const completedLogs = vehicleMaintenance.filter(m => m.status === 'completed');
-      
-      const financialDetails = [
-        ['Status de Garantia:', warranty.status, 'Detalhamento:', warranty.details],
-        ['Custos Acumulados:', `R$ ${totalCosts.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`, 'Ordens de Serviço:', `${vehicleMaintenance.length} Registradas (${completedLogs.length} Concluídas, ${pendingLogs.length} Pendentes)`],
-        ['Preventivas:', `${preventiveLogs.length} Manutenções`, 'Corretivas:', `${correctiveLogs.length} Manutenções`]
+      const getDocStatus = (expDateStr: string | undefined | null) => {
+        if (!expDateStr) return { dateStr: 'NÃO CADASTRE', status: 'N/A', color: [113, 113, 122] as [number, number, number] };
+        try {
+          const expDate = parseISO(expDateStr);
+          const diff = differenceInDays(expDate, today);
+          const formattedDate = format(expDate, 'dd/MM/yyyy');
+          if (diff < 0) {
+            return { dateStr: formattedDate, status: `VENCIDO (${Math.abs(diff)} dias)`, color: [239, 68, 68] as [number, number, number] }; // Red
+          } else if (diff <= 30) {
+            return { dateStr: formattedDate, status: `ALERTA (${diff} dias)`, color: [245, 158, 11] as [number, number, number] }; // Amber/Orange
+          } else {
+            return { dateStr: formattedDate, status: `VÁLIDO (${diff} dias)`, color: [16, 185, 129] as [number, number, number] }; // Green
+          }
+        } catch {
+          return { dateStr: 'INVÁLIDA', status: 'ERRO', color: [239, 68, 68] as [number, number, number] };
+        }
+      };
+
+      const docRows = [
+        ['Licenciamento Anual (CRLV)', getDocStatus(vehicle.licenseExpiration)],
+        ['Autorização de Turismo (CADASTUR)', getDocStatus(vehicle.tourismLicenseExpiration)],
+        ['Registro Cadastur Geral', getDocStatus(vehicle.cadasturExpiration)],
+        ['Registro Geral ANTT', getDocStatus(vehicle.anttExpiration)],
+        ['Registro DETRO / ARTESP', getDocStatus(vehicle.detroArtespExpiration)],
+        ['Alvará de Circulação Municipal', getDocStatus(vehicle.municipalLicenseExpiration)],
+        ['Aferição de Cronotacógrafo', getDocStatus(vehicle.tacografoExpiration)],
+        ['Seguro Obrigatório / RC', getDocStatus(vehicle.insuranceExpiration)]
       ];
-      
+
       autoTable(doc, {
         startY: nextY + 3,
-        body: financialDetails,
-        theme: 'plain',
-        bodyStyles: { fontSize: 8.5, textColor: [39, 39, 42] },
+        head: [['Documento Obrigatório', 'Data Vencimento', 'Status / Dias Restantes', 'Classificação']],
+        body: docRows.map(row => {
+          const statusObj = row[1] as any;
+          return [row[0], statusObj.dateStr, statusObj.status, statusObj.status.startsWith('VÁLIDO') ? 'CONFORME' : statusObj.status.startsWith('VENCIDO') ? 'IRREGULAR' : 'ATENÇÃO'];
+        }),
+        theme: 'grid',
+        headStyles: { fillColor: [15, 23, 42], textColor: [255, 255, 255], fontStyle: 'bold', fontSize: 8, halign: 'center' },
+        bodyStyles: { fontSize: 8, halign: 'center' },
         columnStyles: {
-          0: { fontStyle: 'bold', cellWidth: 32, textColor: [113, 113, 122] },
-          1: { cellWidth: 68, fontStyle: 'bold', textColor: warranty.color }, // highlight warranty status
-          2: { fontStyle: 'bold', cellWidth: 28, textColor: [113, 113, 122] },
-          3: { cellWidth: 52 }
+          0: { halign: 'left', fontStyle: 'bold', cellWidth: 70 },
+          1: { cellWidth: 35 },
+          2: { cellWidth: 50 },
+          3: { cellWidth: 27, fontStyle: 'bold' }
+        },
+        didParseCell: (data) => {
+          if (data.row.index >= 0 && data.column.index === 2) {
+            const statusObj = docRows[data.row.index][1] as any;
+            data.cell.styles.textColor = statusObj.color;
+            data.cell.styles.fontStyle = 'bold';
+          }
+          if (data.row.index >= 0 && data.column.index === 3) {
+            const val = data.cell.text[0];
+            if (val === 'CONFORME') data.cell.styles.textColor = [16, 185, 129];
+            if (val === 'IRREGULAR') data.cell.styles.textColor = [239, 68, 68];
+            if (val === 'ATENÇÃO') data.cell.styles.textColor = [245, 158, 11];
+          }
         },
         margin: { left: 14, right: 14 }
       });
       
       nextY = (doc as any).lastAutoTable.finalY + 8;
+
+      // 3. Condutores Escalados (CNH)
+      if (nextY > 230) {
+        doc.addPage();
+        nextY = 20;
+      }
       
-      // 3. Histórico Detalhado de Manutenções
       doc.setFontSize(11);
       doc.setFont('helvetica', 'bold');
-      doc.setTextColor(24, 24, 27);
-      doc.text('3. HISTÓRICO COMPLETO DE OFICINA', 14, nextY);
+      doc.setTextColor(15, 23, 42);
+      doc.text('3. CONDUTORES ESCALADOS & EXIGÊNCIAS LEGAIS (CNH)', 14, nextY);
+      
+      if (vehicleDrivers.length > 0) {
+        const driverRows = vehicleDrivers.map(drv => {
+          const cnhStatus = getDocStatus(drv.licenseExpiration);
+          return [
+            drv.name.toUpperCase(),
+            drv.cpf || '---',
+            drv.licenseNumber || '---',
+            drv.licenseCategory || '---',
+            cnhStatus.dateStr,
+            cnhStatus.status
+          ];
+        });
+        
+        autoTable(doc, {
+          startY: nextY + 3,
+          head: [['Nome do Motorista', 'CPF', 'Nº Registro CNH', 'Cat.', 'Venc. CNH', 'Status CNH']],
+          body: driverRows,
+          theme: 'grid',
+          headStyles: { fillColor: [15, 23, 42], textColor: [255, 255, 255], fontStyle: 'bold', fontSize: 8, halign: 'center' },
+          bodyStyles: { fontSize: 7.5, halign: 'center' },
+          columnStyles: {
+            0: { halign: 'left', fontStyle: 'bold', cellWidth: 55 },
+            1: { cellWidth: 25 },
+            2: { cellWidth: 30 },
+            3: { cellWidth: 12 },
+            4: { cellWidth: 25 },
+            5: { cellWidth: 35, fontStyle: 'bold' }
+          },
+          didParseCell: (data) => {
+            if (data.row.index >= 0 && data.column.index === 5) {
+              const statusText = driverRows[data.row.index][5];
+              if (statusText.startsWith('VENCIDO')) {
+                data.cell.styles.textColor = [239, 68, 68];
+              } else if (statusText.startsWith('ALERTA')) {
+                data.cell.styles.textColor = [245, 158, 11];
+              } else {
+                data.cell.styles.textColor = [16, 185, 129];
+              }
+            }
+          },
+          margin: { left: 14, right: 14 }
+        });
+        
+        nextY = (doc as any).lastAutoTable.finalY + 8;
+      } else {
+        doc.setFontSize(8.5);
+        doc.setFont('helvetica', 'italic');
+        doc.setTextColor(113, 113, 122);
+        doc.text('Nenhum condutor associado a viagens escaladas com este veículo.', 14, nextY + 4);
+        nextY += 12;
+      }
+
+      // 4. Abastecimentos
+      if (nextY > 170) {
+        doc.addPage();
+        nextY = 20;
+      }
+      
+      doc.setFontSize(11);
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(15, 23, 42);
+      doc.text('4. HISTÓRICO RECENTE DE ABASTECIMENTOS', 14, nextY);
+      
+      if (vehicleFuel.length > 0) {
+        const last10Fuel = vehicleFuel.slice(0, 10);
+        const fuelRows = last10Fuel.map((f, idx) => {
+          const dateStr = f.timestamp ? format(parseISO(f.timestamp), 'dd/MM/yyyy') : '---';
+          const prev = idx < vehicleFuel.length - 1 ? vehicleFuel[idx + 1] : null;
+          const kmDiff = (prev && f.odometer > prev.odometer) ? f.odometer - prev.odometer : null;
+          const consumption = (kmDiff && f.quantity > 0) ? `${(kmDiff / f.quantity).toFixed(2)} km/L` : '---';
+          
+          return [
+            dateStr,
+            `${f.odometer.toLocaleString('pt-BR')} KM`,
+            kmDiff ? `${kmDiff.toLocaleString('pt-BR')} KM` : '---',
+            `${f.quantity.toLocaleString('pt-BR')} L`,
+            `R$ ${f.cost?.toLocaleString('pt-BR', { minimumFractionDigits: 2 }) || '---'}`,
+            consumption,
+            f.arlaQuantity ? `${f.arlaQuantity.toLocaleString('pt-BR')} L` : 'N/A'
+          ];
+        });
+        
+        autoTable(doc, {
+          startY: nextY + 3,
+          head: [['Data', 'Odômetro', 'Dist. Percorrida', 'Litros', 'Valor Total', 'Média Consumo', 'Arla 32']],
+          body: fuelRows,
+          theme: 'grid',
+          headStyles: { fillColor: [15, 23, 42], textColor: [255, 255, 255], fontStyle: 'bold', fontSize: 8, halign: 'center' },
+          bodyStyles: { fontSize: 7.5, halign: 'center' },
+          columnStyles: {
+            0: { cellWidth: 25 },
+            1: { cellWidth: 25 },
+            2: { cellWidth: 28 },
+            3: { cellWidth: 22 },
+            4: { cellWidth: 30, halign: 'right' },
+            5: { cellWidth: 28, fontStyle: 'bold' },
+            6: { cellWidth: 24 }
+          },
+          margin: { left: 14, right: 14 }
+        });
+        
+        nextY = (doc as any).lastAutoTable.finalY + 8;
+      } else {
+        doc.setFontSize(8.5);
+        doc.setFont('helvetica', 'italic');
+        doc.setTextColor(113, 113, 122);
+        doc.text('Nenhum registro de abastecimento para este veículo.', 14, nextY + 4);
+        nextY += 12;
+      }
+
+      // 5. Manutenções
+      if (nextY > 170) {
+        doc.addPage();
+        nextY = 20;
+      }
+      
+      doc.setFontSize(11);
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(15, 23, 42);
+      doc.text('5. HISTÓRICO INTEGRADO DE MANUTENÇÃO (ÚLTIMAS 15 O.S.)', 14, nextY);
       
       if (vehicleMaintenance.length > 0) {
-        const sortedMaintenance = [...vehicleMaintenance].sort((a, b) => new Date(b.completedAt || b.scheduledDate).getTime() - new Date(a.completedAt || a.scheduledDate).getTime());
-        
-        const mRows = sortedMaintenance.map((m, idx) => {
-          // Format date
+        const last15Maint = vehicleMaintenance.slice(0, 15);
+        const maintRows = last15Maint.map((m, idx) => {
           const dateStr = m.completedAt 
             ? format(parseISO(m.completedAt), 'dd/MM/yyyy') 
             : format(parseISO(m.scheduledDate), 'dd/MM/yyyy');
           
-          // Map checklist items to display what was done
-          let tags = '';
-          if (m.checklist) {
-            const labelsMap: Record<string, string> = {
-              oilChanged: 'Óleo',
-              filtersChanged: 'Filtros',
-              frontPadsChanged: 'Past. Diant.',
-              rearPadsChanged: 'Past. Tras.',
-              frontDiscsChanged: 'Disc. Diant.',
-              rearDiscsChanged: 'Disc. Tras.',
-              airConditioning: 'Ar Cond.',
-              tires: 'Pneus',
-              suspension: 'Susp.',
-              transmission: 'Transm.'
-            };
-            const checkedItems = Object.entries(m.checklist)
-              .filter(([k, v]) => v === true && k !== 'others')
-              .map(([k]) => labelsMap[k] || k);
-            
-            if (checkedItems.length > 0) {
-              tags = ` [${checkedItems.join(', ')}]`;
-            }
-          }
-          
           return [
             String(idx + 1).padStart(2, '0'),
-            m.description.toUpperCase() + tags,
+            m.description.toUpperCase(),
             m.type === 'preventive' ? 'PREVENTIVA' : 'CORRETIVA',
-            m.status === 'completed' ? 'CONCLUÍDA' : 'AGENDADA',
+            m.status === 'completed' ? 'CONCLUÍDA' : 'PENDENTE',
             dateStr,
-            m.odometer ? `${m.odometer.toLocaleString()} KM` : '---',
+            m.odometer ? `${m.odometer.toLocaleString('pt-BR')} KM` : '---',
             `R$ ${m.cost?.toLocaleString('pt-BR', { minimumFractionDigits: 2 }) || '0,00'}`
           ];
         });
         
         autoTable(doc, {
           startY: nextY + 3,
-          head: [['Nº', 'Descrição dos Serviços', 'Tipo', 'Situação', 'Data', 'Kms', 'Custo Total']],
-          body: mRows,
+          head: [['OS', 'Descrição dos Serviços', 'Tipo', 'Situação', 'Data', 'Quilometragem', 'Custo']],
+          body: maintRows,
           theme: 'grid',
-          headStyles: { fillColor: [24, 24, 27], textColor: [255, 255, 255], fontStyle: 'bold', halign: 'center', fontSize: 8 },
+          headStyles: { fillColor: [15, 23, 42], textColor: [255, 255, 255], fontStyle: 'bold', fontSize: 8, halign: 'center' },
           bodyStyles: { fontSize: 7.5, halign: 'center' },
           columnStyles: {
-            0: { cellWidth: 10, halign: 'center', fontStyle: 'bold' },
+            0: { cellWidth: 10, fontStyle: 'bold' },
             1: { halign: 'left', cellWidth: 65 },
-            2: { cellWidth: 23, halign: 'center', fontStyle: 'bold' },
-            3: { cellWidth: 20, halign: 'center' },
-            4: { cellWidth: 20, halign: 'center' },
-            5: { cellWidth: 22, halign: 'center' },
-            6: { cellWidth: 24, halign: 'right', fontStyle: 'bold' }
+            2: { cellWidth: 24, fontStyle: 'bold' },
+            3: { cellWidth: 22 },
+            4: { cellWidth: 20 },
+            5: { cellWidth: 24 },
+            6: { cellWidth: 23, halign: 'right', fontStyle: 'bold' }
           },
-          alternateRowStyles: { fillColor: [250, 250, 250] },
           margin: { left: 14, right: 14 }
         });
         
-        nextY = (doc as any).lastAutoTable.finalY + 14;
+        nextY = (doc as any).lastAutoTable.finalY + 8;
       } else {
-        doc.setFontSize(9);
+        doc.setFontSize(8.5);
         doc.setFont('helvetica', 'italic');
         doc.setTextColor(113, 113, 122);
-        doc.text('Nenhum registro de manutenção cadastrado para este veículo.', 14, nextY + 4);
-        nextY += 15;
+        doc.text('Nenhum registro de manutenção para este veículo.', 14, nextY + 4);
+        nextY += 12;
+      }
+
+      // 6. Multas e Infrações
+      if (nextY > 180) {
+        doc.addPage();
+        nextY = 20;
+      }
+      
+      doc.setFontSize(11);
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(15, 23, 42);
+      doc.text('6. MULTAS E INFRAÇÕES DE TRÂNSITO REGISTRADAS', 14, nextY);
+      
+      if (vehicleFines.length > 0) {
+        const fineRows = vehicleFines.map((f, idx) => {
+          const dateStr = f.dueDate ? format(parseISO(f.dueDate), 'dd/MM/yyyy') : '---';
+          return [
+            String(idx + 1).padStart(2, '0'),
+            f.description.toUpperCase(),
+            f.supplier ? f.supplier.toUpperCase() : 'ÓRGÃO TRÂNSITO / DER / PRF',
+            dateStr,
+            f.status === 'paid' ? 'PAGO' : f.status === 'overdue' ? 'VENCIDO' : 'ABERTO',
+            `R$ ${f.amount?.toLocaleString('pt-BR', { minimumFractionDigits: 2 }) || '0,00'}`
+          ];
+        });
+        
+        autoTable(doc, {
+          startY: nextY + 3,
+          head: [['Item', 'Descrição / Local / Enquadramento', 'Órgão Autuador', 'Vencimento', 'Situação', 'Valor']],
+          body: fineRows,
+          theme: 'grid',
+          headStyles: { fillColor: [15, 23, 42], textColor: [255, 255, 255], fontStyle: 'bold', fontSize: 8, halign: 'center' },
+          bodyStyles: { fontSize: 7.5, halign: 'center' },
+          columnStyles: {
+            0: { cellWidth: 10, fontStyle: 'bold' },
+            1: { halign: 'left', cellWidth: 65 },
+            2: { halign: 'left', cellWidth: 35 },
+            3: { cellWidth: 23 },
+            4: { cellWidth: 23, fontStyle: 'bold' },
+            5: { cellWidth: 26, halign: 'right', fontStyle: 'bold' }
+          },
+          didParseCell: (data) => {
+            if (data.row.index >= 0 && data.column.index === 4) {
+              const statusText = fineRows[data.row.index][4];
+              if (statusText === 'PAGO') {
+                data.cell.styles.textColor = [16, 185, 129];
+              } else {
+                data.cell.styles.textColor = [239, 68, 68];
+              }
+            }
+          },
+          margin: { left: 14, right: 14 }
+        });
+        
+        nextY = (doc as any).lastAutoTable.finalY + 12;
+      } else {
+        doc.setFillColor(248, 250, 252);
+        doc.rect(14, nextY + 3, 182, 14, 'F');
+        doc.setDrawColor(226, 232, 240);
+        doc.rect(14, nextY + 3, 182, 14, 'S');
+        
+        doc.setFontSize(8.5);
+        doc.setFont('helvetica', 'normal');
+        doc.setTextColor(16, 185, 129); // Green success
+        doc.text('SITUAÇÃO REGULAR: Nenhuma multa de trânsito ativa ou pendente de pagamento nos cadastros.', 20, nextY + 11);
+        nextY += 25;
       }
       
       // Signatures
@@ -431,14 +971,14 @@ export const VehicleDetail = memo(({ vehicle, maintenanceHistory, fuelHistory, e
       doc.text('DM TURISMO - GESTÃO OPERACIONAL', 14, nextY + 8);
       
       doc.line(120, nextY, 196, nextY);
-      doc.text('CONTROLE DE QUALIDADE & ENGENHARIA DE FROTA', 120, nextY + 4);
-      doc.text('RELAÇÃO DE AUDITORIA MECÂNICA INTEGRADA', 120, nextY + 8);
+      doc.text('CONTROLE DE QUALIDADE & CONFORMIDADE LEGAL', 120, nextY + 4);
+      doc.text('RELAÇÃO DE AUDITORIA MECÂNICA E LEGAL INTEGRADA', 120, nextY + 8);
       
-      doc.save(`Ficha_Tecnica_Hist_Manutencao_${vehicle.plate.replace(/\s/g, '_')}.pdf`);
-      toast.success('Relatório de manutenção exportado com sucesso!');
+      doc.save(`Dossie_Completo_Veiculo_${vehicle.plate.replace(/\s/g, '_')}.pdf`);
+      toast.success('Dossiê Completo do Veículo exportado com sucesso!');
     } catch (e) {
       console.error(e);
-      toast.error('Erro ao gerar relatório técnico em PDF.');
+      toast.error('Erro ao gerar dossiê técnico completo em PDF.');
     }
   };
 
@@ -499,6 +1039,68 @@ export const VehicleDetail = memo(({ vehicle, maintenanceHistory, fuelHistory, e
 
   return (
     <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+      {/* Filtro Principal de Funções (Trazer Para Cima) */}
+      <div className="flex flex-col gap-2 bg-gradient-to-r from-zinc-900 via-zinc-950 to-zinc-900 border border-zinc-800 p-4 rounded-3xl [content-visibility:auto]">
+        <div className="flex items-center gap-2 mb-2">
+          <span className="w-1.5 h-1.5 rounded-full bg-brand-accent shadow-[0_0_8px_rgba(255,107,0,0.5)] animate-pulse" />
+          <span className="text-[10px] font-black tracking-[0.2em] uppercase text-zinc-400">Atalhos de Operações do Ativo</span>
+        </div>
+        <div className="flex flex-wrap items-center p-1 bg-zinc-950/80 border border-zinc-850 rounded-2xl w-full gap-1 select-none">
+          <button 
+            type="button"
+            onClick={() => setActiveOverlayTab('overview')}
+            className="flex-1 min-w-[130px] flex items-center justify-center gap-3 px-5 py-4 rounded-xl text-[10.5px] font-black uppercase tracking-widest transition-all hover:bg-zinc-900/50 hover:text-white text-zinc-400 shrink-0 cursor-pointer border border-transparent hover:border-zinc-800"
+          >
+            <LayoutDashboard size={14} className="text-brand-accent" />
+            <span>Visão Geral</span>
+          </button>
+          <button 
+            type="button"
+            onClick={() => setActiveOverlayTab('checklists')}
+            className="flex-1 min-w-[130px] flex items-center justify-center gap-3 px-5 py-4 rounded-xl text-[10.5px] font-black uppercase tracking-widest transition-all hover:bg-zinc-900/50 hover:text-white text-zinc-400 cursor-pointer border border-transparent hover:border-zinc-800"
+          >
+            <ClipboardCheck size={14} className="text-emerald-500" />
+            <span>Checklist</span>
+          </button>
+          <button 
+            type="button"
+            onClick={() => setActiveOverlayTab('maintenance')}
+            className="flex-1 min-w-[130px] flex items-center justify-center gap-3 px-5 py-4 rounded-xl text-[10.5px] font-black uppercase tracking-widest transition-all hover:bg-zinc-900/50 hover:text-white text-zinc-400 cursor-pointer border border-transparent hover:border-zinc-800"
+          >
+            <Wrench size={14} className="text-amber-500" />
+            <span>Manutenção</span>
+          </button>
+          <button 
+            type="button"
+            onClick={() => setActiveOverlayTab('charts')}
+            className="flex-1 min-w-[130px] flex items-center justify-center gap-3 px-5 py-4 rounded-xl text-[10.5px] font-black uppercase tracking-widest transition-all hover:bg-zinc-900/50 hover:text-white text-zinc-400 cursor-pointer border border-transparent hover:border-zinc-800"
+          >
+            <BarChart3 size={14} className="text-blue-500" />
+            <span>Desempenho</span>
+          </button>
+        </div>
+      </div>
+
+      {/* Botões de Ação Rápida do Gestor - Nova OS e Novo Abastecimento */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <button
+          type="button"
+          onClick={() => onAddTrip?.(vehicle.id)}
+          className="flex items-center justify-center gap-3 px-6 py-4.5 bg-brand-accent/10 hover:bg-brand-accent text-brand-accent hover:text-zinc-950 border border-brand-accent/20 hover:border-brand-accent rounded-2xl text-[11px] font-black uppercase tracking-widest transition-all duration-300 shadow-lg active:scale-[0.98] cursor-pointer group"
+        >
+          <Plus size={16} className="transition-transform duration-300 group-hover:rotate-90 text-brand-accent group-hover:text-zinc-950" />
+          <span>Nova OS / Agendar Viagem</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => onAddFuel?.(vehicle.id)}
+          className="flex items-center justify-center gap-3 px-6 py-4.5 bg-zinc-900 hover:bg-zinc-850 text-zinc-300 hover:text-white border border-zinc-800 hover:border-zinc-700 rounded-2xl text-[11px] font-black uppercase tracking-widest transition-all duration-300 shadow-lg active:scale-[0.98] cursor-pointer group"
+        >
+          <Fuel size={16} className="text-zinc-400 group-hover:text-brand-accent transition-colors duration-300" />
+          <span>Novo Abastecimento</span>
+        </button>
+      </div>
+
       {/* Alerts Section */}
       {alerts.length > 0 && (
         <div className="space-y-3">
@@ -533,11 +1135,16 @@ export const VehicleDetail = memo(({ vehicle, maintenanceHistory, fuelHistory, e
       {/* Header Info */}
       <div className="flex flex-col md:flex-row gap-6 items-start justify-between">
         <div className="flex items-center gap-6">
-          <label className="w-20 h-20 bg-zinc-800 rounded-3xl flex items-center justify-center border border-zinc-700 shadow-2xl relative overflow-hidden group cursor-pointer">
+          <label className={cn(
+            "w-20 h-20 bg-zinc-800 rounded-3xl flex items-center justify-center border shadow-2xl relative overflow-hidden group cursor-pointer transition-all",
+            vehicle.featured 
+              ? "border-yellow-500/80 shadow-[0_0_20px_rgba(234,179,8,0.4)] animate-[pulse_2s_infinite]" 
+              : "border-zinc-700 hover:border-zinc-500"
+          )}>
             {vehicle.photoUrl ? (
               <img src={vehicle.photoUrl} alt={vehicle.plate} className="w-full h-full object-cover group-hover:scale-110 transition-transform" />
             ) : (
-              <Bus className="text-brand-accent group-hover:scale-110 transition-transform" size={36} />
+              <Bus className={cn("group-hover:scale-110 transition-transform", vehicle.featured ? "text-yellow-500" : "text-brand-accent")} size={36} />
             )}
             <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
               <Camera size={20} className="text-white" />
@@ -545,41 +1152,94 @@ export const VehicleDetail = memo(({ vehicle, maintenanceHistory, fuelHistory, e
             <input type="file" className="hidden" accept="image/*" onChange={handleUpdatePhoto} />
           </label>
           <div>
-            <h2 className="text-4xl font-black text-white uppercase tracking-tighter tabular-nums">{vehicle.plate}</h2>
+            <h2 className="text-4xl font-black text-white uppercase tracking-tighter tabular-nums flex flex-wrap items-center gap-3">
+              {vehicle.plate}
+              {vehicle.featured && (
+                <span className="px-3 py-1 bg-yellow-500 text-zinc-950 text-[9px] font-black uppercase rounded-lg tracking-wider animate-pulse shadow-[0_0_12px_rgba(234,179,8,0.5)]">
+                  Prioridade de Inspeção
+                </span>
+              )}
+            </h2>
             <div className="flex items-center gap-3 mt-1">
               <span className={cn(
-                "px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-widest border",
+                "px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-widest border flex items-center gap-2 transition-all duration-700 ease-in-out shadow-sm",
                 vehicle.status === 'available' 
-                  ? "bg-emerald-950/30 text-emerald-500 border-emerald-900/40" 
-                  : "bg-amber-950/30 text-amber-500 border-amber-900/40"
+                  ? "bg-emerald-950/20 text-emerald-450 border-emerald-500/20 shadow-emerald-950/20" 
+                  : vehicle.status === 'maintenance'
+                  ? "bg-amber-950/20 text-amber-500 border-amber-500/20 shadow-amber-950/20"
+                  : "bg-rose-950/20 text-rose-450 border-rose-500/20 shadow-rose-950/20"
               )}>
-                {vehicle.status === 'available' ? 'Operacional' : 'Em Manutenção'}
+                <span className="relative flex h-2 w-2">
+                  <span className={cn(
+                    "animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 transition-colors duration-700 ease-in-out",
+                    vehicle.status === 'available' 
+                      ? "bg-emerald-400" 
+                      : vehicle.status === 'maintenance'
+                      ? "bg-amber-500"
+                      : "bg-rose-400"
+                  )}></span>
+                  <span className={cn(
+                    "relative inline-flex rounded-full h-2 w-2 transition-colors duration-700 ease-in-out",
+                    vehicle.status === 'available' 
+                      ? "bg-emerald-500" 
+                      : vehicle.status === 'maintenance'
+                      ? "bg-amber-500"
+                      : "bg-rose-500"
+                  )}></span>
+                </span>
+                {vehicle.status === 'available' 
+                  ? 'Liberado' 
+                  : vehicle.status === 'maintenance' 
+                  ? 'Em Manutenção' 
+                  : 'Inativo'}
               </span>
               <span className="text-xs font-black text-zinc-500 uppercase tracking-widest">{vehicle.model}</span>
             </div>
           </div>
         </div>
-        <div className="flex gap-3">
+        <div className="flex gap-3 flex-wrap">
           <button 
+            type="button"
             onClick={handleShare}
-            className="flex items-center gap-2 px-6 py-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-xl font-black uppercase text-[10px] tracking-widest transition-all border border-zinc-700 hover:border-zinc-500"
+            className="flex items-center gap-2 px-4 py-2.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-xl font-black uppercase text-[10px] tracking-widest transition-all border border-zinc-700 hover:border-zinc-500 cursor-pointer"
           >
-            <Share2 size={16} />
+            <Share2 size={14} />
             Compartilhar
           </button>
           <button 
+            type="button"
             onClick={onEdit}
-            className="flex items-center gap-2 px-6 py-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-xl font-black uppercase text-[10px] tracking-widest transition-all border border-zinc-700 hover:border-zinc-500"
+            className="flex items-center gap-2 px-4 py-2.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-xl font-black uppercase text-[10px] tracking-widest transition-all border border-zinc-700 hover:border-zinc-500 cursor-pointer"
           >
-            <Edit3 size={16} />
+            <Edit3 size={14} />
             Editar Cadastro
+          </button>
+          <button 
+            type="button"
+            onClick={handleDownloadTechnicalMaintenanceReport}
+            className="flex items-center gap-2 px-4 py-2.5 bg-blue-600/10 hover:bg-blue-600 text-blue-450 hover:text-white rounded-xl font-black uppercase text-[10px] tracking-widest transition-all border border-blue-500/20 shadow-xl cursor-pointer"
+            id="btn-dossier-download"
+            title="Baixar dossiê técnico de oficina completo em PDF"
+          >
+            <FileText size={14} />
+            Dossiê Completo do Veículo
+          </button>
+          <button 
+            type="button"
+            onClick={() => setSoldConfirmOpen(true)}
+            className="flex items-center gap-2 px-4 py-2.5 bg-amber-500/10 hover:bg-amber-500 text-amber-500 hover:text-zinc-950 rounded-xl font-black uppercase text-[10px] tracking-widest transition-all border border-amber-500/30 shadow-xl cursor-pointer"
+            id="btn-mark-sold"
+          >
+            <DollarSign size={14} />
+            Vendido
           </button>
           {onDelete && (
             <button 
+              type="button"
               onClick={() => onDelete?.()}
-              className="flex items-center gap-2 px-6 py-3 bg-rose-500/10 hover:bg-rose-500 text-rose-500 hover:text-white rounded-xl font-black uppercase text-[10px] tracking-widest transition-all border border-rose-500/30 shadow-xl"
+              className="flex items-center gap-2 px-4 py-2.5 bg-rose-500/10 hover:bg-rose-500 text-rose-500 hover:text-white rounded-xl font-black uppercase text-[10px] tracking-widest transition-all border border-rose-500/30 shadow-xl cursor-pointer"
             >
-              <Trash2 size={16} />
+              <Trash2 size={14} />
               Excluir
             </button>
           )}
@@ -593,7 +1253,7 @@ export const VehicleDetail = memo(({ vehicle, maintenanceHistory, fuelHistory, e
           { label: 'Km Atual', value: `${vehicle.currentOdometer.toLocaleString()} KM`, icon: Navigation },
           { label: 'Custo Manut.', value: `R$ ${vehicleMaintenance.reduce((sum, m) => sum + (m.cost || 0), 0).toLocaleString()}`, icon: DollarSign },
           { label: 'Ano Fab.', value: vehicle.factoryYear, icon: Calendar },
-          { label: 'Tipo', value: vehicle.type === 'van' ? 'VAN' : 'ÔNIBUS', icon: Hash },
+          { label: 'Tipo', value: vehicle.type === 'van' ? 'VAN' : vehicle.type === 'microbus' ? 'MICRO-ÔNIBUS' : 'ÔNIBUS', icon: Hash },
         ].map((stat, i) => (
           <div key={i} className="p-4 bg-zinc-950 border border-zinc-800 rounded-2xl">
             <stat.icon size={16} className="text-zinc-600 mb-2" />
@@ -733,7 +1393,7 @@ export const VehicleDetail = memo(({ vehicle, maintenanceHistory, fuelHistory, e
                   <td className="py-4 pl-4 text-right">
                     <button 
                       onClick={() => setDeleteConfirm({ isOpen: true, id: f.id, type: 'fuel' })}
-                      className="p-2 text-zinc-700 hover:text-rose-500 transition-colors opacity-0 group-hover:opacity-100"
+                      className="p-2 text-zinc-700 hover:text-rose-500 transition-colors opacity-0 group-hover:opacity-100 cursor-pointer"
                     >
                       <Trash2 size={14} />
                     </button>
@@ -741,7 +1401,7 @@ export const VehicleDetail = memo(({ vehicle, maintenanceHistory, fuelHistory, e
                 </tr>
               )) : (
                 <tr>
-                  <td colSpan={5} className="py-12 text-center text-[10px] font-black text-zinc-600 uppercase tracking-widest">
+                  <td colSpan={5} className="py-12 text-center text-[10px] font-black text-zinc-650 uppercase tracking-widest">
                     Nenhum abastecimento registrado
                   </td>
                 </tr>
@@ -751,576 +1411,847 @@ export const VehicleDetail = memo(({ vehicle, maintenanceHistory, fuelHistory, e
         </div>
       </div>
 
-      {/* History Tabs */}
-      <div className="space-y-6">
-        <div className="flex items-center p-1.5 bg-zinc-950 border border-zinc-800 rounded-2xl w-fit overflow-x-auto">
-          <button 
-            onClick={() => setActiveTab('overview')}
-            className={cn(
-              "px-6 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center gap-2 shrink-0",
-              activeTab === 'overview' ? "bg-zinc-800 text-brand-accent shadow-lg" : "text-zinc-500 hover:text-zinc-300"
-            )}
-          >
-            <LayoutDashboard size={14} />
-            Visão Geral
-          </button>
-          <button 
-            onClick={() => setActiveTab('maintenance')}
-            className={cn(
-              "px-6 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center gap-2",
-              activeTab === 'maintenance' ? "bg-zinc-800 text-brand-accent shadow-lg" : "text-zinc-500 hover:text-zinc-300"
-            )}
-          >
-            <Wrench size={14} />
-            Manutenção
-          </button>
-          <button 
-            onClick={() => setActiveTab('checklists')}
-            className={cn(
-              "px-6 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center gap-2",
-              activeTab === 'checklists' ? "bg-zinc-800 text-brand-accent shadow-lg" : "text-zinc-500 hover:text-zinc-300"
-            )}
-          >
-            <ClipboardCheck size={14} />
-            Checklist
-          </button>
-          <button 
-            onClick={() => setActiveTab('charts')}
-            className={cn(
-              "px-6 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center gap-2",
-              activeTab === 'charts' ? "bg-zinc-800 text-brand-accent shadow-lg" : "text-zinc-500 hover:text-zinc-300"
-            )}
-          >
-            <BarChart3 size={14} />
-            Desempenho
-          </button>
-        </div>
+      {/* Overlay Modals for Active Functions */}
+      <AnimatePresence>
+        {activeOverlayTab && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 bg-black/80 backdrop-blur-sm" id="overlay-portal-container">
+            {/* Backdrop Click Closes Modal */}
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setActiveOverlayTab(null)}
+              className="absolute inset-0 cursor-pointer"
+            />
 
-        <div className="min-h-[350px]">
-          {activeTab === 'overview' ? (
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 animate-in fade-in slide-in-from-top-4 duration-500">
-               {/* Resumo de Manutenção Proativa */}
-               <div className="space-y-6">
-                  <div className="flex items-center justify-between">
-                    <h3 className="text-xs font-black text-zinc-500 uppercase tracking-widest flex items-center gap-3">
-                      <Wrench size={14} className="text-brand-accent" />
-                      Próximas Intervenções
-                    </h3>
-                  </div>
-                  <div className="grid grid-cols-1 gap-4">
-                     <div className="p-6 bg-zinc-900 border border-zinc-800 rounded-2xl relative overflow-hidden group">
-                        <div className="flex justify-between items-start relative z-10">
-                           <div>
-                              <p className="text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-1">Troca de Óleo</p>
-                              <p className="text-2xl font-black text-white tabular-nums">
-                                {vehicle.nextOilChangeKM ? `${vehicle.nextOilChangeKM.toLocaleString()} KM` : '---'}
-                              </p>
-                           </div>
-                           {vehicle.nextOilChangeKM && (
-                             <div className="text-right">
-                                <p className={cn(
-                                  "text-sm font-black italic",
-                                  (vehicle.nextOilChangeKM - vehicle.currentOdometer) <= 1000 ? "text-rose-500" : "text-emerald-500"
-                                )}>
-                                  {vehicle.nextOilChangeKM - vehicle.currentOdometer <= 0 
-                                    ? `ATRASADO: ${Math.abs(vehicle.nextOilChangeKM - vehicle.currentOdometer)} KM`
-                                    : `FALTAM: ${vehicle.nextOilChangeKM - vehicle.currentOdometer} KM`}
-                                </p>
-                             </div>
-                           )}
-                        </div>
-                        <div className="mt-4 h-1 bg-zinc-800 rounded-full overflow-hidden">
-                           <div 
-                             className={cn("h-full transition-all duration-1000", (vehicle.nextOilChangeKM && vehicle.nextOilChangeKM - vehicle.currentOdometer <= 1000) ? "bg-rose-500" : "bg-emerald-500")}
-                             style={{ width: vehicle.nextOilChangeKM ? `${Math.max(5, Math.min(100, (1 - (vehicle.nextOilChangeKM - vehicle.currentOdometer) / 10000) * 100))}%` : '0%' }}
-                           />
-                        </div>
-                     </div>
-
-                     <div className="p-6 bg-zinc-900 border border-zinc-800 rounded-2xl relative overflow-hidden group">
-                        <div className="flex justify-between items-start relative z-10">
-                           <div>
-                              <p className="text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-1">Preventiva Agendada</p>
-                              <p className="text-2xl font-black text-white">
-                                {vehicle.nextPreventiveMaintenanceDate ? format(parseISO(vehicle.nextPreventiveMaintenanceDate), 'dd/MM/yyyy') : '---'}
-                              </p>
-                           </div>
-                           {vehicle.nextPreventiveMaintenanceDate && (
-                             <div className="text-right">
-                                <p className={cn(
-                                  "text-sm font-black italic",
-                                  differenceInDays(parseISO(vehicle.nextPreventiveMaintenanceDate), new Date()) <= 15 ? "text-rose-500" : "text-emerald-500"
-                                )}>
-                                  {differenceInDays(parseISO(vehicle.nextPreventiveMaintenanceDate), new Date()) < 0 
-                                    ? 'DATA ULTRAPASSADA'
-                                    : `EM ${differenceInDays(parseISO(vehicle.nextPreventiveMaintenanceDate), new Date())} DIAS`}
-                                </p>
-                             </div>
-                           )}
-                        </div>
-                     </div>
-                  </div>
-
-                  {/* Viagens Recentes/Ativas */}
-                  <div className="space-y-4 pt-4">
-                    <h3 className="text-xs font-black text-zinc-500 uppercase tracking-widest flex items-center gap-3">
-                      <TrendingUp size={14} className="text-emerald-500" />
-                      Atividade Recente
-                    </h3>
-                    <div className="space-y-2">
-                       {trips.filter(t => t.vehicleId === vehicle.id).slice(0, 3).map(trip => (
-                         <div key={trip.id} className="p-4 bg-zinc-800/40 rounded-xl border border-zinc-800 flex justify-between items-center group hover:bg-zinc-800 transition-all">
-                            <div className="flex items-center gap-4">
-                               <div className={cn(
-                                 "w-10 h-10 rounded-lg flex items-center justify-center",
-                                 trip.status === 'active' ? "bg-emerald-500/20 text-emerald-500" : "bg-zinc-700 text-zinc-400"
-                               )}>
-                                  <MapPin size={18} />
-                               </div>
-                               <div>
-                                  <p className="text-[10px] font-black text-white uppercase">{trip.destination}</p>
-                                  <p className="text-[9px] text-zinc-500 font-bold uppercase mt-1">{format(parseISO(trip.startDate), 'dd/MM/yyyy')}</p>
-                               </div>
-                            </div>
-                            <span className={cn(
-                              "px-3 py-1 rounded-md text-[8px] font-black uppercase tracking-widest",
-                              trip.status === 'active' ? "bg-emerald-500/10 text-emerald-500" : "bg-zinc-950 text-zinc-600"
-                            )}>
-                              {trip.status === 'active' ? 'EM CURSO' : 'FINALIZADA'}
-                            </span>
-                         </div>
-                       ))}
-                       {trips.filter(t => t.vehicleId === vehicle.id).length === 0 && (
-                         <p className="text-[10px] font-black text-zinc-700 uppercase p-8 text-center bg-zinc-950 rounded-2xl border border-dashed border-zinc-800">Nenhuma viagem registrada</p>
-                       )}
-                    </div>
-                  </div>
-               </div>
-
-               {/* Resumo Financeiro / Eficiência */}
-               <div className="space-y-6">
-                  <div className="flex items-center justify-between">
-                    <h3 className="text-xs font-black text-zinc-500 uppercase tracking-widest flex items-center gap-3">
-                      <BarChart3 size={14} className="text-blue-500" />
-                      Indicadores de Desempenho
-                    </h3>
-                  </div>
-                  <div className="grid grid-cols-2 gap-4">
-                     <div className="p-6 bg-zinc-900 border border-zinc-800 rounded-3xl">
-                        <TrendingUp size={24} className="text-emerald-500 mb-4 opacity-50" />
-                        <p className="text-2xl font-black text-white tabular-nums">
-                          {vehicleFuel.length > 0 ? (vehicleFuel.reduce((acc, f) => acc + f.quantity, 0) / vehicleFuel.length).toFixed(1) : '0'}
-                          <span className="text-xs text-zinc-600 ml-1">L/avg</span>
-                        </p>
-                        <p className="text-[9px] font-black text-zinc-500 uppercase tracking-widest mt-1">Média Abastecimento</p>
-                     </div>
-                     <div className="p-6 bg-zinc-900 border border-zinc-800 rounded-3xl">
-                        <DollarSign size={24} className="text-blue-500 mb-4 opacity-50" />
-                        <p className="text-2xl font-black text-white tabular-nums">
-                          {vehicleMaintenance.length > 0 ? (vehicleMaintenance.reduce((acc, m) => acc + (m.cost || 0), 0) / vehicleMaintenance.length).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }) : 'R$ 0'}
-                        </p>
-                        <p className="text-[9px] font-black text-zinc-500 uppercase tracking-widest mt-1">Ticket Médio Oficina</p>
-                     </div>
-                  </div>
-
-                  <div className="p-8 bg-zinc-950 border border-zinc-800 rounded-[2rem] space-y-4">
-                     <div className="flex items-center gap-4">
-                        <div className="w-10 h-10 bg-brand-accent/10 rounded-xl flex items-center justify-center text-brand-accent">
-                           <LayoutDashboard size={20} />
-                        </div>
-                        <div>
-                           <p className="text-[10px] font-black text-zinc-500 uppercase tracking-widest">Saúde Geral do Ativo</p>
-                           <p className="text-sm font-black text-white uppercase">Selo de Qualidade DM</p>
-                        </div>
-                     </div>
-                     <div className="h-3 bg-zinc-800 rounded-full overflow-hidden flex">
-                        <div className="h-full bg-emerald-500" style={{ width: '85%' }} />
-                        <div className="h-full bg-zinc-700" style={{ width: '15%' }} />
-                     </div>
-                     <p className="text-[9px] font-bold text-zinc-600 leading-relaxed italic">
-                       Este veículo encontra-se com 85% de conformidade operacional baseado nos últimos checklists e manutenções preventivas.
-                     </p>
-                  </div>
-               </div>
-            </div>
-          ) : activeTab === 'maintenance' ? (
-            <div className="space-y-6 animate-in fade-in slide-in-from-left-4 duration-300">
-              {/* Resumo de Manutenção e Próximos Passos */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="p-6 bg-zinc-950 border border-zinc-800 rounded-2xl relative overflow-hidden group">
-                  <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
-                    <Wrench size={80} />
-                  </div>
-                  <div className="relative z-10">
-                    <h3 className="text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-4 flex items-center gap-2">
-                      <Calendar size={14} className="text-brand-accent" />
-                      Próxima Revisão Preventiva
-                    </h3>
-                    <div className="flex items-end gap-3">
-                      <span className="text-3xl font-black text-white tabular-nums tracking-tighter">
-                        {vehicle.nextPreventiveMaintenanceDate ? format(parseISO(vehicle.nextPreventiveMaintenanceDate), 'dd/MM/yyyy') : 'NÃO AGENDADA'}
-                      </span>
-                      {vehicle.nextPreventiveMaintenanceDate && (
-                        <span className={cn(
-                          "px-2 py-1 rounded text-[8px] font-black uppercase mb-1",
-                          differenceInDays(parseISO(vehicle.nextPreventiveMaintenanceDate), new Date()) <= 7 
-                            ? "bg-rose-500 text-white" 
-                            : "bg-emerald-500 text-black"
-                        )}>
-                          {differenceInDays(parseISO(vehicle.nextPreventiveMaintenanceDate), new Date())} DIAS
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                </div>
-
-                <div className="p-6 bg-zinc-950 border border-zinc-800 rounded-2xl relative overflow-hidden group">
-                  <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
-                    <TrendingUp size={80} />
-                  </div>
-                  <div className="relative z-10">
-                    <h3 className="text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-4 flex items-center gap-2">
-                      <Hash size={14} className="text-brand-accent" />
-                      Próxima Troca de Óleo
-                    </h3>
-                    <div className="flex items-end gap-3">
-                      <span className="text-3xl font-black text-white tabular-nums tracking-tighter">
-                        {vehicle.nextOilChangeKM ? `${vehicle.nextOilChangeKM.toLocaleString()} KM` : 'NÃO DEFINIDO'}
-                      </span>
-                      {vehicle.nextOilChangeKM && (
-                        <span className={cn(
-                          "px-2 py-1 rounded text-[8px] font-black uppercase mb-1",
-                          (vehicle.nextOilChangeKM - vehicle.currentOdometer) <= 1500 
-                            ? "bg-rose-500 text-white" 
-                            : "bg-emerald-500 text-black"
-                        )}>
-                          {(vehicle.nextOilChangeKM - vehicle.currentOdometer).toLocaleString()} KM
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Card de Ação Rápida: Registrar Manutenção */}
-              <button 
-                onClick={onAddMaintenance}
-                className="w-full p-8 bg-brand-accent/5 border border-brand-accent/20 rounded-3xl group hover:bg-brand-accent/10 hover:border-brand-accent/40 transition-all flex flex-col md:flex-row items-center justify-between gap-6 overflow-hidden relative"
-              >
-                <div className="absolute -right-12 -bottom-12 opacity-5 group-hover:scale-110 transition-transform duration-700">
-                  <Wrench size={240} className="text-brand-accent" />
-                </div>
-                
-                <div className="flex items-center gap-6 relative z-10 text-center md:text-left">
-                  <div className="p-5 bg-brand-accent text-zinc-950 rounded-2xl shadow-xl shadow-brand-accent/20">
-                    <Plus size={32} />
-                  </div>
-                  <div>
-                    <h4 className="text-xl font-black text-white uppercase tracking-tighter mb-1">Registrar Manutenção</h4>
-                    <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Clique aqui para abrir a ficha de serviço e cronograma</p>
-                  </div>
-                </div>
-
-                <div className="relative z-10 bg-brand-accent px-6 py-3 rounded-xl text-zinc-950 text-[10px] font-black uppercase tracking-widest group-hover:px-8 transition-all">
-                  Nova Ordem de Serviço
-                </div>
-              </button>
-
-              <div className="flex items-center justify-between mt-8 mb-4">
+            {/* Modal Body */}
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95, y: 15 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 15 }}
+              transition={{ type: 'spring', duration: 0.4 }}
+              className="relative w-full max-w-4xl max-h-[85vh] bg-zinc-950 border border-zinc-800/80 rounded-3xl flex flex-col overflow-hidden shadow-2xl z-10"
+              id="overlay-modal-body"
+            >
+              {/* Modal Header */}
+              <div className="flex items-center justify-between p-6 border-b border-zinc-850 bg-zinc-950/90 backdrop-blur-md sticky top-0 z-10">
                 <div className="flex items-center gap-3">
-                  <div className="p-2 bg-brand-accent/10 rounded-xl">
-                    <Wrench className="text-brand-accent" size={20} />
-                  </div>
+                  {activeOverlayTab === 'overview' && <LayoutDashboard className="text-brand-accent text-orange-500" size={18} />}
+                  {activeOverlayTab === 'checklists' && <ClipboardCheck className="text-emerald-500" size={18} />}
+                  {activeOverlayTab === 'maintenance' && <Wrench className="text-amber-500" size={18} />}
+                  {activeOverlayTab === 'charts' && <BarChart3 className="text-blue-500" size={18} />}
+                  
                   <div>
-                    <h3 className="text-sm font-black text-white uppercase tracking-widest">Histórico de Oficina</h3>
-                    <p className="text-[10px] font-bold text-zinc-500 uppercase">Gestão de ordens e preventivas</p>
+                    <h3 className="text-base font-black text-white uppercase tracking-wider">
+                      {activeOverlayTab === 'overview' && 'Visão Geral do Ativo'}
+                      {activeOverlayTab === 'checklists' && 'Checklist & Vistorias'}
+                      {activeOverlayTab === 'maintenance' && 'Histórico de Manutenções'}
+                      {activeOverlayTab === 'charts' && 'Desempenho & Estatísticas'}
+                    </h3>
+                    <p className="text-[9px] text-zinc-500 font-bold uppercase tracking-widest mt-0.5">
+                      {vehicle.plate} • {activeOverlayTab === 'overview' && 'Acompanhamento proativo de prazos e métricas'}
+                      {activeOverlayTab === 'checklists' && 'Consulta e realização de listas de conformidade'}
+                      {activeOverlayTab === 'maintenance' && 'Consulta e controle de ordens de serviço e intervenções'}
+                      {activeOverlayTab === 'charts' && 'Consumo e eficiência operacional do diesel'}
+                    </p>
                   </div>
                 </div>
-                <button
-                  onClick={handleDownloadTechnicalMaintenanceReport}
-                  className="px-4 py-2.5 bg-zinc-800 border border-zinc-700 hover:border-brand-accent hover:text-brand-accent text-white font-black text-[10px] uppercase tracking-wider rounded-xl transition-all shadow-lg flex items-center gap-2"
-                >
-                  <FileSpreadsheet size={14} />
-                  Exportar Relatório PDF
-                </button>
+
+                {/* Header Switcher + Close Button */}
+                <div className="flex items-center gap-3">
+                  {/* Embedded Small Selector */}
+                  <div className="hidden sm:flex items-center p-1 bg-zinc-900 border border-zinc-800 rounded-xl gap-1">
+                    <button 
+                      onClick={() => setActiveOverlayTab('overview')}
+                      className={cn(
+                        "px-2.5 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-wider transition-all cursor-pointer",
+                        activeOverlayTab === 'overview' ? "bg-zinc-800 text-brand-accent" : "text-zinc-500 hover:text-zinc-300"
+                      )}
+                    >
+                      Visão
+                    </button>
+                    <button 
+                      onClick={() => setActiveOverlayTab('checklists')}
+                      className={cn(
+                        "px-2.5 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-wider transition-all cursor-pointer",
+                        activeOverlayTab === 'checklists' ? "bg-zinc-800 text-brand-accent" : "text-zinc-500 hover:text-zinc-300"
+                      )}
+                    >
+                      Checklist
+                    </button>
+                    <button 
+                      onClick={() => setActiveOverlayTab('maintenance')}
+                      className={cn(
+                        "px-2.5 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-wider transition-all cursor-pointer",
+                        activeOverlayTab === 'maintenance' ? "bg-zinc-800 text-brand-accent" : "text-zinc-500 hover:text-zinc-300"
+                      )}
+                    >
+                      Manutenção
+                    </button>
+                    <button 
+                      onClick={() => setActiveOverlayTab('charts')}
+                      className={cn(
+                        "px-2.5 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-wider transition-all cursor-pointer",
+                        activeOverlayTab === 'charts' ? "bg-zinc-800 text-brand-accent" : "text-zinc-500 hover:text-zinc-300"
+                      )}
+                    >
+                      Desempenho
+                    </button>
+                  </div>
+
+                  <button 
+                    onClick={() => setActiveOverlayTab(null)}
+                    className="p-2 bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-white rounded-xl transition-all border border-zinc-800 hover:border-zinc-700 cursor-pointer"
+                    title="Fechar Painel"
+                  >
+                    <X size={15} />
+                  </button>
+                </div>
               </div>
 
-              <div className="space-y-4">
-                {vehicleMaintenance.length === 0 ? (
-                  <div className="p-12 text-center bg-zinc-900/50 border border-dashed border-zinc-800 rounded-3xl">
-                    <Wrench className="mx-auto text-zinc-800 mb-4" size={48} />
-                    <p className="text-sm font-black text-zinc-600 uppercase tracking-widest">Nenhuma manutenção encontrada</p>
-                  </div>
-                ) : (
-                  vehicleMaintenance.sort((a, b) => new Date(b.completedAt || b.scheduledDate).getTime() - new Date(a.completedAt || a.scheduledDate).getTime()).map((m) => (
-                    <div key={m.id} className="group p-6 bg-zinc-900 border border-zinc-800 rounded-3xl hover:border-zinc-700 transition-all">
-                      <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
-                        <div className="flex items-start gap-4">
-                          <div className={cn(
-                            "p-4 rounded-2xl shrink-0",
-                            m.type === 'preventive' ? "bg-emerald-500/10 text-emerald-500" : m.type === 'corrective' ? "bg-rose-500/10 text-rose-500" : "bg-zinc-800 text-zinc-500"
-                          )}>
-                            <Wrench size={24} />
-                          </div>
-                          <div>
-                            <div className="flex items-center gap-3 mb-1">
-                              <h4 className="text-sm font-black text-white uppercase tracking-widest">{m.description}</h4>
-                              <span className={cn(
-                                "px-2 py-0.5 rounded text-[8px] font-black uppercase",
-                                m.type === 'preventive' ? "bg-emerald-500/10 text-emerald-500 border border-emerald-500/20" : "bg-rose-500/10 text-rose-500 border border-rose-500/20"
-                              )}>
-                                {m.type === 'preventive' ? 'Preventiva' : 'Corretiva'}
-                              </span>
+              {/* Modal Content Scroll Area */}
+              <div className="flex-1 overflow-y-auto p-6 sm:p-8 space-y-6">
+                {activeOverlayTab === 'overview' && (
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 animate-in fade-in slide-in-from-top-4 duration-500">
+                     {/* Resumo de Manutenção Proativa */}
+                     <div className="space-y-6">
+                        <div className="flex items-center justify-between">
+                          <h3 className="text-xs font-black text-zinc-500 uppercase tracking-widest flex items-center gap-3">
+                            <Wrench size={14} className="text-brand-accent" />
+                            Próximas Intervenções
+                          </h3>
+                          <button 
+                            onClick={() => {
+                              setIsEditingSchedule(!isEditingSchedule);
+                              setEditNextOilKM(vehicle.nextOilChangeKM ? String(vehicle.nextOilChangeKM) : '');
+                              setEditNextMaintDate(vehicle.nextPreventiveMaintenanceDate || '');
+                            }}
+                            className="text-[9px] font-black uppercase text-brand-accent hover:text-brand-accent/80 tracking-widest transition-all cursor-pointer bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 hover:border-zinc-700 px-3 py-1.5 rounded-xl flex items-center gap-1"
+                          >
+                            <Edit3 size={11} />
+                            {isEditingSchedule ? 'Cancelar' : 'Editar Cronograma'}
+                          </button>
+                        </div>
+                        <div className="grid grid-cols-1 gap-4">
+                           <div className="p-6 bg-zinc-900 border border-zinc-800 rounded-2xl relative overflow-hidden group">
+                              <div className="flex justify-between items-start relative z-10">
+                                 <div className="w-full">
+                                    <p className="text-[10px] font-black text-zinc-550 uppercase tracking-widest mb-1.5">Troca de Óleo</p>
+                                    {isEditingSchedule ? (
+                                      <div className="mt-2 flex gap-2 items-center">
+                                        <input 
+                                          type="number" 
+                                          value={editNextOilKM} 
+                                          onChange={(e) => setEditNextOilKM(e.target.value)}
+                                          placeholder="Ex: 60000" 
+                                          className="bg-zinc-950 text-white font-mono text-sm px-3 py-2 rounded-xl border border-zinc-800 focus:outline-none focus:border-brand-accent w-full"
+                                        />
+                                        <span className="text-[10px] font-black text-zinc-550 uppercase">KM</span>
+                                      </div>
+                                    ) : (
+                                      <p className="text-2xl font-black text-white tabular-nums">
+                                        {vehicle.nextOilChangeKM ? `${vehicle.nextOilChangeKM.toLocaleString()} KM` : '---'}
+                                      </p>
+                                    )}
+                                 </div>
+                                 {!isEditingSchedule && vehicle.nextOilChangeKM && (
+                                   <div className="text-right">
+                                      <p className={cn(
+                                        "text-sm font-black italic",
+                                        (vehicle.nextOilChangeKM - vehicle.currentOdometer) <= 1000 ? "text-rose-500" : "text-emerald-500"
+                                      )}>
+                                        {vehicle.nextOilChangeKM - vehicle.currentOdometer <= 0 
+                                          ? `ATRASADO: ${Math.abs(vehicle.nextOilChangeKM - vehicle.currentOdometer).toLocaleString()} KM`
+                                          : `FALTAM: ${(vehicle.nextOilChangeKM - vehicle.currentOdometer).toLocaleString()} KM`}
+                                      </p>
+                                   </div>
+                                 )}
+                              </div>
+                              {!isEditingSchedule && (
+                                <div className="mt-4 h-1 bg-zinc-800 rounded-full overflow-hidden">
+                                   <div 
+                                     className={cn("h-full transition-all duration-1000", (vehicle.nextOilChangeKM && vehicle.nextOilChangeKM - vehicle.currentOdometer <= 1000) ? "bg-rose-500" : "bg-emerald-500")}
+                                     style={{ width: vehicle.nextOilChangeKM ? `${Math.max(5, Math.min(100, (1 - (vehicle.nextOilChangeKM - vehicle.currentOdometer) / 10000) * 100))}%` : '0%' }}
+                                   />
+                                </div>
+                              )}
+                           </div>
+
+                           <div className="p-6 bg-zinc-900 border border-zinc-850 rounded-2xl relative overflow-hidden group">
+                              <div className="flex justify-between items-start relative z-10">
+                                 <div className="w-full">
+                                    <p className="text-[10px] font-black text-zinc-550 uppercase tracking-widest mb-1.5">Preventiva Agendada</p>
+                                    {isEditingSchedule ? (
+                                      <div className="mt-2">
+                                        <input 
+                                          type="date" 
+                                          value={editNextMaintDate} 
+                                          onChange={(e) => setEditNextMaintDate(e.target.value)}
+                                          className="bg-zinc-950 text-white font-mono text-sm px-3 py-2 rounded-xl border border-zinc-800 focus:outline-none focus:border-brand-accent w-full"
+                                        />
+                                      </div>
+                                    ) : (
+                                      <p className="text-2xl font-black text-white">
+                                        {vehicle.nextPreventiveMaintenanceDate ? format(parseISO(vehicle.nextPreventiveMaintenanceDate), 'dd/MM/yyyy') : '---'}
+                                      </p>
+                                    )}
+                                 </div>
+                                 {!isEditingSchedule && vehicle.nextPreventiveMaintenanceDate && (
+                                   <div className="text-right">
+                                      <p className={cn(
+                                        "text-sm font-black italic",
+                                        differenceInDays(parseISO(vehicle.nextPreventiveMaintenanceDate), new Date()) <= 15 ? "text-rose-500" : "text-emerald-500"
+                                      )}>
+                                        {differenceInDays(parseISO(vehicle.nextPreventiveMaintenanceDate), new Date()) < 0 
+                                          ? 'DATA ULTRAPASSADA'
+                                          : `EM ${differenceInDays(parseISO(vehicle.nextPreventiveMaintenanceDate), new Date())} DIAS`}
+                                      </p>
+                                   </div>
+                                 )}
+                              </div>
+                           </div>
+
+                           {isEditingSchedule && (
+                             <motion.div 
+                               initial={{ opacity: 0, y: 10 }}
+                               animate={{ opacity: 1, y: 0 }}
+                               className="pt-2"
+                             >
+                               <button
+                                 onClick={handleSaveSchedule}
+                                 disabled={isSavingSchedule}
+                                 className="w-full flex items-center justify-center gap-2 px-5 py-3 bg-brand-accent hover:bg-brand-accent/90 disabled:bg-zinc-800 text-white rounded-xl font-black uppercase text-[10px] tracking-widest transition-all border border-brand-accent/30 shadow-lg cursor-pointer"
+                               >
+                                 {isSavingSchedule ? 'Salvando...' : 'Salvar Cronograma'}
+                               </button>
+                             </motion.div>
+                           )}
+                        </div>
+                     </div>
+
+                         {/* Rotas de Manutenção Preventiva (KM) */}
+                         <div className="bg-zinc-900 border border-zinc-850 p-6 rounded-3xl space-y-6">
+                            <div className="flex items-center justify-between">
+                               <div className="flex items-center gap-3">
+                                  <div className="p-2 bg-brand-accent/10 rounded-xl text-brand-accent">
+                                     <Wrench size={16} />
+                                  </div>
+                                  <div>
+                                     <h3 className="text-xs font-black text-white uppercase tracking-widest">Rotas Preventivas por KM</h3>
+                                     <p className="text-[9px] text-zinc-500 uppercase font-bold tracking-tight">Alertas automáticos ao atingir 80% do limite</p>
+                                  </div>
+                               </div>
+                               <button
+                                 type="button"
+                                 onClick={() => setIsAddingRoute(!isAddingRoute)}
+                                 className="px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-brand-accent rounded-xl text-[9px] font-black uppercase tracking-widest transition-colors flex items-center gap-1.5 cursor-pointer"
+                               >
+                                  {isAddingRoute ? <X size={11} /> : <Plus size={11} />}
+                                  {isAddingRoute ? 'Cancelar' : 'Nova Rota'}
+                               </button>
                             </div>
-                            <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider mb-2">
-                              {m.completedAt 
-                                ? `Concluída em ${format(parseISO(m.completedAt), 'dd MMM yyyy')}` 
-                                : `Agendada para ${format(parseISO(m.scheduledDate), 'dd MMM yyyy')}`}
-                              <span className="mx-2">•</span>
-                              KM: {m.odometer?.toLocaleString() || '---'}
-                            </p>
-                            
-                            {(m.nextMaintenanceKM || m.nextPreventiveMaintenanceDate) && (
-                              <div className="flex items-center gap-3 p-1.5 px-2 bg-zinc-950/50 border border-zinc-800/50 rounded-lg w-fit">
-                                <span className="text-[7px] font-black text-zinc-600 uppercase tracking-widest">Previsão:</span>
-                                {m.nextMaintenanceKM && (
-                                  <div className="flex items-center gap-1">
-                                    <Hash size={8} className="text-brand-accent" />
-                                    <span className="text-[8px] font-black text-zinc-300 tabular-nums">{m.nextMaintenanceKM.toLocaleString()} KM</span>
+
+                            {/* Form to add new KM Route */}
+                            {isAddingRoute && (
+                               <div className="p-5 bg-zinc-950 border border-zinc-800 rounded-2xl space-y-4 animate-in fade-in slide-in-from-top-4 duration-300">
+                                  <p className="text-[9px] font-black uppercase text-zinc-550 tracking-widest">Nova Configuração de Rota</p>
+                                  
+                                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                     <div className="space-y-1.5">
+                                        <label className="text-[9px] font-black uppercase text-zinc-500 tracking-wider">Tipo/Modelo da Rota</label>
+                                        <select
+                                          value={newRouteTemplate}
+                                          onChange={(e) => {
+                                            setNewRouteTemplate(e.target.value);
+                                            if (e.target.value === 'Troca de Óleo e Filtro') setNewRouteInterval('10000');
+                                            else if (e.target.value === 'Alinhamento e Balanceamento') setNewRouteInterval('10000');
+                                            else if (e.target.value === 'Revisão do Sistema de Freios') setNewRouteInterval('20000');
+                                            else if (e.target.value === 'Revisão Geral da Suspensão') setNewRouteInterval('40000');
+                                            else if (e.target.value === 'Substituição Filtros Combustível/Ar') setNewRouteInterval('15000');
+                                            else if (e.target.value === 'Troca de Correias e Tensores') setNewRouteInterval('50000');
+                                            else {
+                                              setNewRouteInterval('');
+                                              setNewRouteName('');
+                                            }
+                                          }}
+                                          className="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-3 py-2 text-xs font-medium text-white focus:outline-none focus:border-brand-accent"
+                                        >
+                                           <option value="custom">⚙️ Rota Personalizada...</option>
+                                           <option value="Troca de Óleo e Filtro">🛢️ Troca de Óleo e Filtro (10k KM)</option>
+                                           <option value="Alinhamento e Balanceamento">⚖️ Alinhamento e Balanceamento (10k KM)</option>
+                                           <option value="Revisão do Sistema de Freios">🛑 Revisão de Freios (20k KM)</option>
+                                           <option value="Substituição Filtros Combustível/Ar">💨 Filtros Combustível/Ar (15k KM)</option>
+                                           <option value="Revisão Geral da Suspensão">⚙️ Revisão da Suspensão (40k KM)</option>
+                                           <option value="Troca de Correias e Tensores">⛓️ Correias e Tensores (50k KM)</option>
+                                        </select>
+                                     </div>
+
+                                     {newRouteTemplate === 'custom' && (
+                                        <div className="space-y-1.5">
+                                           <label className="text-[9px] font-black uppercase text-zinc-500 tracking-wider">Nome da Rota</label>
+                                           <input
+                                             type="text"
+                                             value={newRouteName}
+                                             onChange={(e) => setNewRouteName(e.target.value)}
+                                             placeholder="Ex: Troca da Caixa de Marcha"
+                                             className="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-3 py-2 text-xs font-medium text-white focus:outline-none focus:border-brand-accent"
+                                           />
+                                        </div>
+                                     )}
+
+                                     <div className="space-y-1.5">
+                                        <label className="text-[9px] font-black uppercase text-zinc-500 tracking-wider">Intervalo (KM)</label>
+                                        <input
+                                          type="number"
+                                          value={newRouteInterval}
+                                          onChange={(e) => setNewRouteInterval(e.target.value)}
+                                          placeholder="Ex: 15000"
+                                          className="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-3 py-2 text-xs font-mono text-white focus:outline-none focus:border-brand-accent"
+                                        />
+                                     </div>
+
+                                     <div className="space-y-1.5">
+                                        <label className="text-[9px] font-black uppercase text-zinc-500 tracking-wider">Última Realizada (KM)</label>
+                                        <input
+                                          type="number"
+                                          value={newRouteLastKM}
+                                          onChange={(e) => setNewRouteLastKM(e.target.value)}
+                                          placeholder="Ex: 55000"
+                                          className="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-3 py-2 text-xs font-mono text-white focus:outline-none focus:border-brand-accent"
+                                        />
+                                     </div>
                                   </div>
+
+                                  <button
+                                    type="button"
+                                    onClick={handleAddRoute}
+                                    disabled={isSavingRoute}
+                                    className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-brand-accent hover:bg-brand-accent/90 disabled:bg-zinc-800 text-zinc-950 font-black uppercase text-[10px] tracking-widest rounded-xl transition-all shadow-md cursor-pointer mt-2"
+                                  >
+                                     {isSavingRoute ? 'Configurando...' : 'Salvar e Ativar Rota'}
+                                  </button>
+                               </div>
+                            )}
+
+                            {/* Active Routes List */}
+                            <div className="space-y-4">
+                               {!vehicle.preventiveKMConfig || vehicle.preventiveKMConfig.length === 0 ? (
+                                  <div className="p-8 text-center bg-zinc-950/40 border border-dashed border-zinc-850 rounded-2xl">
+                                     <p className="text-[10px] text-zinc-600 font-bold uppercase tracking-wider">Nenhuma rota de manutenção KM configurada neste veículo.</p>
+                                     <p className="text-[9px] text-zinc-700 uppercase mt-1">Crie uma nova rota acima para começar a monitorar em tempo real.</p>
+                                  </div>
+                               ) : (
+                                  vehicle.preventiveKMConfig.map((route) => {
+                                     const distanceRun = (vehicle.currentOdometer || 0) - (route.lastKM || 0);
+                                     const pct = Math.min(100, Math.round(route.kmInterval > 0 ? (distanceRun / route.kmInterval) * 100 : 0));
+                                     const kmRemaining = (route.nextDueKM || 0) - (vehicle.currentOdometer || 0);
+                                     
+                                     const isCritical = pct >= 100;
+                                     const isAlert80 = pct >= 80 && pct < 100;
+
+                                     return (
+                                        <div key={route.id} className="p-5 bg-zinc-950 border border-zinc-850 hover:border-zinc-800 rounded-2xl relative overflow-hidden group/route transition-all">
+                                           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 relative z-10">
+                                              <div>
+                                                 <div className="flex items-center gap-2">
+                                                    <p className="text-xs font-black text-white uppercase tracking-tight">{route.routeName}</p>
+                                                    {isCritical ? (
+                                                       <span className="text-[8px] font-black text-rose-500 bg-rose-500/10 px-2 py-0.5 rounded-full border border-rose-500/20 uppercase animate-pulse">Crítico (100%+)</span>
+                                                    ) : isAlert80 ? (
+                                                       <span className="text-[8px] font-black text-brand-accent bg-brand-accent/10 px-2 py-0.5 rounded-full border border-brand-accent/20 uppercase animate-pulse">Alerta (80%+)</span>
+                                                    ) : (
+                                                       <span className="text-[8px] font-black text-emerald-500 bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/10 uppercase">Monitorando</span>
+                                                    )}
+                                                 </div>
+                                                 <p className="text-[9px] font-bold text-zinc-550 uppercase tracking-widest mt-1">
+                                                    Intervalo: a cada {route.kmInterval.toLocaleString()} KM • Última: {route.lastKM.toLocaleString()} KM • Limite: {route.nextDueKM.toLocaleString()} KM
+                                                 </p>
+                                              </div>
+
+                                              <div className="flex items-center gap-3 self-end sm:self-center">
+                                                 <button
+                                                   type="button"
+                                                   onClick={() => handleResetRoute(route.id)}
+                                                   className="px-3 py-1.5 bg-zinc-900 hover:bg-zinc-800 text-emerald-500 hover:text-emerald-400 rounded-xl text-[9px] font-black uppercase tracking-widest transition-colors flex items-center gap-1 border border-zinc-850 hover:border-zinc-800 cursor-pointer"
+                                                   title="Marcar como realizada e zerar progresso"
+                                                 >
+                                                    <CheckCircle2 size={11} />
+                                                    Zerar Rota
+                                                 </button>
+                                                 <button
+                                                   type="button"
+                                                   onClick={() => {
+                                                     if(confirm(`Excluir a rota "${route.routeName}"?`)) {
+                                                       handleDeleteRoute(route.id);
+                                                     }
+                                                   }}
+                                                   className="p-1.5 bg-zinc-900 hover:bg-rose-500/10 text-zinc-650 hover:text-rose-500 rounded-lg transition-colors cursor-pointer border border-zinc-850 hover:border-rose-500/10"
+                                                   title="Remover Rota"
+                                                 >
+                                                    <Trash2 size={12} />
+                                                 </button>
+                                              </div>
+                                           </div>
+
+                                           {/* Progress Bar */}
+                                           <div className="mt-4">
+                                              <div className="flex items-center justify-between text-[9px] font-black uppercase tracking-tight text-zinc-500 mb-1.5">
+                                                 <span>{distanceRun.toLocaleString()} KM rodados</span>
+                                                 <span className={cn(
+                                                   isCritical ? "text-rose-500" : isAlert80 ? "text-brand-accent" : "text-emerald-500"
+                                                 )}>{pct}% atingido</span>
+                                              </div>
+                                              <div className="h-2 bg-zinc-900 border border-zinc-850 rounded-full overflow-hidden">
+                                                 <div 
+                                                   className={cn(
+                                                     "h-full rounded-full transition-all duration-1000",
+                                                     isCritical ? "bg-rose-500 shadow-[0_0_10px_rgba(239,68,68,0.5)]" : isAlert80 ? "bg-brand-accent shadow-[0_0_10px_rgba(251,191,36,0.5)]" : "bg-emerald-500"
+                                                   )}
+                                                   style={{ width: `${pct}%` }}
+                                                 />
+                                              </div>
+                                              {kmRemaining > 0 ? (
+                                                 <p className="text-[9px] font-bold text-zinc-600 uppercase mt-1.5">Faltam {kmRemaining.toLocaleString()} KM para a próxima revisão</p>
+                                              ) : (
+                                                 <p className="text-[9px] font-bold text-rose-500 uppercase mt-1.5">Atrasada por {Math.abs(kmRemaining).toLocaleString()} KM! Realizar revisão imediatamente!</p>
+                                              )}
+                                           </div>
+                                        </div>
+                                     );
+                                  })
+                               )}
+                            </div>
+                         </div>
+
+                     {/* Viagens Recentes/Ativas */}
+                     <div className="space-y-4 pt-4">
+                       <h3 className="text-xs font-black text-zinc-500 uppercase tracking-widest flex items-center gap-3">
+                         <TrendingUp size={14} className="text-emerald-500" />
+                         Atividade Recente
+                       </h3>
+                       <div className="space-y-2">
+                          {trips.filter(t => t.vehicleId === vehicle.id).slice(0, 3).map(trip => (
+                            <div key={trip.id} className="p-4 bg-zinc-800/40 rounded-xl border border-zinc-800 flex justify-between items-center group hover:bg-zinc-800 transition-all">
+                               <div className="flex items-center gap-4">
+                                  <div className={cn(
+                                    "w-10 h-10 rounded-lg flex items-center justify-center",
+                                    trip.status === 'active' ? "bg-emerald-500/20 text-emerald-500" : "bg-zinc-800 text-zinc-400"
+                                  )}>
+                                     <MapPin size={18} />
+                                  </div>
+                                  <div>
+                                     <p className="text-xs font-black text-white uppercase">{trip.title}</p>
+                                     <p className="text-[10px] text-zinc-550 font-bold uppercase mt-0.5">{trip.origin} - {trip.destination}</p>
+                                  </div>
+                               </div>
+                               <div className="text-right">
+                                  <span className={cn(
+                                    "px-2.5 py-1 rounded-md text-[8px] font-black uppercase tracking-wider border",
+                                    trip.status === 'active' 
+                                      ? "bg-emerald-950/40 text-emerald-500 border-emerald-900/40" 
+                                      : "bg-zinc-950 text-zinc-500 border-zinc-900"
+                                  )}>
+                                    {trip.status === 'active' ? 'Em Rota' : 'Programada'}
+                                  </span>
+                               </div>
+                            </div>
+                          ))}
+                          {trips.filter(t => t.vehicleId === vehicle.id).length === 0 && (
+                            <div className="p-12 text-center text-[10px] font-black text-zinc-650 uppercase tracking-widest bg-zinc-900/30 rounded-2xl border border-dashed border-zinc-900">
+                               Nenhuma viagem recente
+                            </div>
+                          )}
+                       </div>
+                     </div>
+                  </div>
+                )}
+
+                {activeOverlayTab === 'maintenance' && (
+                  <div className="space-y-6 animate-in fade-in slide-in-from-top-4 duration-300">
+                    <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between">
+                      <div>
+                        <h3 className="text-xs font-black text-zinc-500 uppercase tracking-widest">Histórico Técnico de Revisões</h3>
+                        <p className="text-[10px] text-zinc-600 font-bold uppercase mt-1">Garantia, ordens de serviço abertas e prontuário histórico</p>
+                      </div>
+                      <div className="flex gap-2">
+                        <button 
+                          onClick={handleDownloadTechnicalMaintenanceReport}
+                          className="flex items-center gap-2 px-4 py-2.5 bg-zinc-800 hover:bg-zinc-750 text-zinc-300 rounded-xl font-black uppercase text-[10px] tracking-widest transition-all border border-zinc-700/60 hover:border-zinc-500 cursor-pointer"
+                        >
+                          <Printer size={14} />
+                          Ficha Técnica PDF
+                        </button>
+                        {(onAddMaintenance || onSaveMaintenance) && (
+                          <button 
+                            onClick={() => {
+                              if (onSaveMaintenance) {
+                                setInnerMaintenanceForm({
+                                  isOpen: true,
+                                  initialData: { vehicleId: vehicle.id, odometer: vehicle.currentOdometer }
+                                });
+                              } else {
+                                onAddMaintenance?.();
+                              }
+                            }}
+                            className="flex items-center gap-2 px-5 py-2.5 bg-brand-accent hover:bg-brand-accent/90 text-white rounded-xl font-black uppercase text-[10px] tracking-widest transition-all border border-brand-accent/30 shadow-lg shadow-brand-accent/10 cursor-pointer"
+                          >
+                            <Wrench size={14} />
+                            Registrar Manutenção
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="space-y-3">
+                      {vehicleMaintenance.length > 0 ? vehicleMaintenance.map(log => {
+                        const warranty = getWarrantyStatus(vehicle);
+                        
+                        return (
+                          <div key={log.id} className="p-6 bg-zinc-900 hover:bg-zinc-900/80 border border-zinc-800 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-6 transition-all group relative overflow-hidden">
+                            <div className="flex items-start gap-4 shrink-0">
+                              <div className={cn(
+                                "w-12 h-12 rounded-xl flex items-center justify-center shrink-0 border",
+                                log.type === 'preventive' 
+                                  ? "bg-emerald-950/30 text-emerald-500 border-emerald-900/40" 
+                                  : "bg-rose-955 text-rose-500 border-rose-900/40"
+                              )}>
+                                <Wrench size={20} />
+                              </div>
+                              <div>
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <h4 className="text-xs font-black text-white uppercase tracking-tight">{log.description}</h4>
+                                  <span className={cn(
+                                    "px-2 py-0.5 rounded-md text-[8px] font-black uppercase tracking-wider border",
+                                    log.type === 'preventive' 
+                                      ? "bg-emerald-950/30 text-emerald-500 border-emerald-900/20" 
+                                      : "bg-rose-950/30 text-rose-500 border-rose-900/20"
+                                  )}>
+                                    {log.type === 'preventive' ? 'Preventiva' : 'Corretiva'}
+                                  </span>
+                                  {log.status === 'pending' && (
+                                    <span className="px-2 py-0.5 rounded-md text-[8px] font-black uppercase tracking-wider border bg-amber-950/30 text-amber-500 border-amber-900/20">
+                                      Pendente Os
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="flex flex-wrap items-center gap-y-1 gap-x-4 mt-1">
+                                  <p className="text-[10px] text-zinc-505 font-bold uppercase tracking-wider flex items-center gap-1.5">
+                                    <Calendar size={12} />
+                                    {log.completedAt 
+                                      ? `Concluído em: ${format(parseISO(log.completedAt), 'dd/MM/yyyy')}`
+                                      : `Agendado: ${format(parseISO(log.scheduledDate), 'dd/MM/yyyy')}`}
+                                  </p>
+                                  {log.odometer && (
+                                    <p className="text-[10px] text-zinc-505 font-bold uppercase tracking-wider flex items-center gap-1.5 border-l border-zinc-800 pr-0 pl-4 tabular-nums">
+                                      <Navigation size={12} />
+                                      {log.odometer.toLocaleString()} KM
+                                    </p>
+                                  )}
+                                  <p className="text-[10px] text-zinc-505 font-bold uppercase tracking-wider flex items-center gap-1.5 border-l border-zinc-800 pr-0 pl-4">
+                                    <Users size={12} />
+                                    Mecânico: {((log as any).mechanicId && employees.find(e => e.id === (log as any).mechanicId)?.name) || 'TERCEIRIZADO / OFICINA'}
+                                  </p>
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-4 self-end sm:self-center">
+                              <div className="text-right">
+                                <p className="text-[9px] font-black text-zinc-550 uppercase tracking-widest">Valor do Reparo</p>
+                                <p className="text-sm font-black text-emerald-400 tabular-nums">
+                                  R$ {log.cost?.toLocaleString('pt-BR', { minimumFractionDigits: 2 }) || '0,00'}
+                                </p>
+                              </div>
+                              <div className="flex items-center gap-1 pr-1 border-l border-zinc-800 pl-3">
+                                <button 
+                                  onClick={() => onPrintOS?.(log)}
+                                  className="p-2 text-zinc-505 hover:text-zinc-200 hover:bg-zinc-800 transition-all rounded-lg border border-transparent hover:border-zinc-700 cursor-pointer"
+                                  title="Imprimir O.S. Oficial"
+                                >
+                                  <Printer size={14} />
+                                </button>
+                                {(onEditMaintenance || onSaveMaintenance) && (
+                                  <button 
+                                    onClick={() => {
+                                      if (onSaveMaintenance) {
+                                        setInnerMaintenanceForm({
+                                          isOpen: true,
+                                          initialData: log
+                                        });
+                                      } else {
+                                        onEditMaintenance?.(log);
+                                      }
+                                    }}
+                                    className="p-2 text-zinc-505 hover:text-brand-accent hover:bg-zinc-800 transition-all rounded-lg border border-transparent hover:border-zinc-705 cursor-pointer"
+                                    title="Editar Registro"
+                                  >
+                                    <Edit3 size={14} />
+                                  </button>
                                 )}
-                                {m.nextPreventiveMaintenanceDate && (
-                                  <div className="flex items-center gap-1">
-                                    <Calendar size={8} className="text-brand-accent" />
-                                    <span className="text-[8px] font-black text-zinc-300">{format(parseISO(m.nextPreventiveMaintenanceDate), 'dd/MM/yyyy')}</span>
-                                  </div>
+                                {onDeleteMaintenance && (
+                                  <button 
+                                    onClick={() => setDeleteConfirm({ isOpen: true, id: log.id, type: 'maintenance' })}
+                                    className="p-2 text-zinc-650 hover:text-rose-500 hover:bg-rose-500/10 transition-all rounded-lg border border-transparent hover:border-rose-500/20 cursor-pointer"
+                                    title="Excluir O.S."
+                                  >
+                                    <Trash2 size={14} />
+                                  </button>
                                 )}
                               </div>
-                            )}
+                            </div>
                           </div>
-                        </div>
-                        
-                        <div className="flex items-center gap-4 bg-zinc-950/50 p-3 rounded-2xl border border-zinc-800/50">
-                          <div className="text-right px-4 border-r border-zinc-800">
-                            <p className="text-[8px] font-black text-zinc-500 uppercase tracking-widest mb-1">Custo Total</p>
-                            <p className="text-lg font-black text-white tabular-nums tracking-tight">R$ {m.cost?.toLocaleString() || '0,00'}</p>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <button 
-                              onClick={() => {
-                                if (window.confirm('Tem certeza que deseja excluir esta manutenção?')) {
-                                  onDeleteMaintenance?.(m.id || '');
-                                }
-                              }}
-                              className="p-3 bg-zinc-800 hover:bg-rose-500/20 hover:text-rose-500 text-zinc-500 rounded-xl transition-all"
-                              title="Excluir Registro"
-                            >
-                              <Trash2 size={16} />
-                            </button>
-                            <button 
-                              onClick={() => onPrintOS?.(m)}
-                              className="p-3 bg-brand-accent text-zinc-950 rounded-xl transition-all shadow-lg shadow-brand-accent/10"
-                              title="Imprimir Ordem de Serviço"
-                            >
-                              <FileSpreadsheet size={16} />
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                      
-                      {m.checklist && (
-                        <div className="mt-4 flex flex-wrap gap-2 pt-4 border-t border-zinc-800/50">
-                          {Object.entries(m.checklist)
-                            .filter(([k, v]) => v === true && k !== 'others')
-                            .map(([k]) => {
-                              const labels: any = {
-                                oilChanged: 'Troca de Óleo',
-                                filtersChanged: 'Filtros',
-                                frontPadsChanged: 'Pastilha Diant.',
-                                rearPadsChanged: 'Pastilha Tras.',
-                                frontDiscsChanged: 'Disco Diant.',
-                                rearDiscsChanged: 'Disco Tras.',
-                                airConditioning: 'Ar Condicionado',
-                                tires: 'Pneus',
-                                suspension: 'Suspensão',
-                                transmission: 'Transmissão',
-                                bathroom: 'Banheiro',
-                                minibar: 'Frigobar',
-                                airSuspension: 'Susp. Ar',
-                                tachograph: 'Tacógrafo',
-                                slidingDoor: 'Porta de Correr',
-                                step: 'Estribo',
-                                rearSeat: 'Bancos'
-                              };
-                              return (
-                                <span key={k} className="px-2 py-1 bg-zinc-800 text-zinc-500 rounded-md text-[7px] font-black uppercase tracking-widest border border-zinc-700">
-                                  {labels[k] || k}
-                                </span>
-                              );
-                            })}
+                        );
+                      }) : (
+                        <div className="p-16 text-center bg-zinc-950 rounded-3xl border border-dashed border-zinc-850">
+                          <p className="text-[10px] font-black text-zinc-655 uppercase tracking-widest">Nenhum histórico mecânico cadastrado</p>
                         </div>
                       )}
-                    </div>
-                  ))
-                )}
-              </div>
-            </div>
-          ) : activeTab === 'checklists' ? (
-            <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-300">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h3 className="text-xs font-black text-zinc-500 uppercase tracking-[0.2em]">Checklists Operacionais</h3>
-                  <p className="text-[10px] text-zinc-600 font-bold uppercase mt-1">Vistorias periódicas realizadas</p>
-                </div>
-                <button 
-                  onClick={() => setIsChecklistModalOpen(true)}
-                  className="px-4 py-2 bg-brand-accent text-zinc-950 rounded-lg text-[10px] font-black uppercase tracking-widest hover:scale-105 transition-transform"
-                >
-                  Nova Vistoria
-                </button>
-              </div>
-
-              <div className="space-y-3">
-                {checklists.length > 0 ? checklists.map(c => (
-                  <div key={c.id} className="p-5 bg-zinc-800/30 border border-zinc-800/50 rounded-2xl flex justify-between items-center group hover:bg-zinc-800/50 transition-all">
-                    <div className="flex items-center gap-4">
-                      <div className="w-12 h-12 bg-zinc-900 rounded-xl flex items-center justify-center text-zinc-600">
-                        <ClipboardCheck size={20} />
-                      </div>
-                      <div>
-                        <span className="text-[10px] font-black text-white uppercase">{c.responsible}</span>
-                      <p className="text-[9px] text-zinc-500 font-black uppercase mt-1">{format(parseISO(c.date), "dd 'de' MMMM 'às' HH:mm", { locale: ptBR })}</p>
                     </div>
                   </div>
-                  <div className="flex items-center gap-6">
-                    <div className="text-right">
-                      <p className="text-xs font-black text-white tabular-nums">{c.odometer.toLocaleString()} KM</p>
-                      <span className="text-[8px] text-zinc-600 font-black uppercase tracking-widest">Odômetro</span>
-                    </div>
-                    <div className="flex items-center gap-4">
-                      {c.items.filter(i => i.status === 'issue').length > 0 ? (
-                        <div className="w-6 h-6 rounded-full bg-rose-500/20 flex items-center justify-center text-rose-500 border border-rose-500/30" title="Avarias encontradas">
-                          <AlertCircle size={12} />
-                        </div>
-                      ) : (
-                        <div className="w-6 h-6 rounded-full bg-emerald-500/20 flex items-center justify-center text-emerald-500 border border-emerald-500/30" title="Tudo OK">
-                          <CheckCircle2 size={12} />
-                        </div>
-                      )}
-                      
+                )}
+
+                {activeOverlayTab === 'checklists' && (
+                  <div className="space-y-6 animate-in fade-in slide-in-from-top-4 duration-300">
+                    <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between">
+                      <div>
+                        <h3 className="text-xs font-black text-zinc-500 uppercase tracking-widest">Registros de Vistorias</h3>
+                        <p className="text-[10px] text-zinc-600 font-bold uppercase mt-1">Inspeções de rotina, segurança e controle de pertences realizados por motoristas</p>
+                      </div>
                       <button 
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setDeleteConfirm({ isOpen: true, id: c.id, type: 'checklist' });
-                        }}
-                        className="p-2 text-zinc-600 hover:text-rose-500 transition-colors opacity-0 group-hover:opacity-100"
-                        title="Excluir Checklist"
+                        onClick={() => setIsChecklistModalOpen(true)}
+                        className="flex items-center gap-2 px-5 py-2.5 bg-brand-accent hover:bg-brand-accent/90 text-white rounded-xl font-black uppercase text-[10px] tracking-widest transition-all border border-brand-accent/30 shadow-lg cursor-pointer"
                       >
-                        <Trash2 size={14} />
+                        <Plus size={14} />
+                        Realizar Nova Vistoria
                       </button>
                     </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {checklists.length > 0 ? checklists.map(c => (
+                        <div key={c.id} className="p-5 bg-zinc-900 border border-zinc-800 rounded-2xl flex flex-col justify-between gap-4 group hover:bg-zinc-900/80 transition-colors">
+                          <div className="flex justify-between items-start">
+                            <div>
+                              <div className="flex items-center gap-2">
+                                <ClipboardCheck className="text-brand-accent" size={15} />
+                                <span className="text-[10px] font-black text-zinc-400 tabular-nums">
+                                  {format(parseISO(c.date), 'dd/MM/yyyy HH:mm')}
+                                </span>
+                              </div>
+                              <p className="text-xs font-black text-white uppercase mt-2">
+                                Inspecionado por: {c.responsible || 'Motorista'}
+                              </p>
+                            </div>
+                            
+                            <div className="flex items-center gap-2">
+                              {c.items?.some(item => item.status === 'issue') ? (
+                                <div className="w-6 h-6 rounded-full bg-rose-500/20 flex items-center justify-center text-rose-500 border border-rose-500/30" title="Possui Pendências">
+                                  <AlertCircle size={12} />
+                                </div>
+                              ) : (
+                                <div className="w-6 h-6 rounded-full bg-emerald-500/20 flex items-center justify-center text-emerald-500 border border-emerald-500/30" title="Tudo OK">
+                                  <CheckCircle2 size={12} />
+                                </div>
+                              )}
+                              
+                              <button 
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setDeleteConfirm({ isOpen: true, id: c.id, type: 'checklist' });
+                                }}
+                                className="p-2 text-zinc-650 hover:text-rose-500 transition-colors opacity-0 group-hover:opacity-100 cursor-pointer"
+                                title="Excluir Checklist"
+                              >
+                                <Trash2 size={14} />
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      )) : (
+                        <div className="col-span-full p-16 text-center bg-zinc-950 rounded-3xl border border-dashed border-zinc-800">
+                          <p className="text-[10px] font-black text-zinc-600 uppercase tracking-widest">Nenhuma vistoria realizada neste veículo</p>
+                        </div>
+                      )}
+                    </div>
                   </div>
-                </div>
-                )) : (
-                  <div className="p-16 text-center bg-zinc-950 rounded-3xl border border-dashed border-zinc-800">
-                    <p className="text-[10px] font-black text-zinc-600 uppercase tracking-widest">Nenhuma vistoria realizada neste veículo</p>
+                )}
+
+                {activeOverlayTab === 'charts' && (
+                  <div className="space-y-6 animate-in fade-in zoom-in-95 duration-300">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <h3 className="text-xs font-black text-zinc-500 uppercase tracking-[0.2em]">Consumo Mensal de Diesel</h3>
+                        <p className="text-[10px] text-zinc-600 font-bold uppercase mt-1">Análise de volume por período</p>
+                      </div>
+                    </div>
+                    
+                    <div className="h-64 bg-zinc-950 border border-zinc-800 rounded-2xl p-6">
+                      <ResponsiveContainer width="100%" height="100%">
+                          <BarChart data={
+                            // Group fuel by month
+                            Object.values(vehicleFuel.reduce((acc: any, log) => {
+                              if (!log.timestamp) return acc;
+                              const month = format(parseISO(log.timestamp), 'MMM', { locale: ptBR });
+                              if (!acc[month]) acc[month] = { name: month, volume: 0 };
+                              acc[month].volume += log.quantity;
+                              return acc;
+                            }, {}))
+                          }>
+                          <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#27272a" />
+                          <XAxis dataKey="name" fontSize={10} tickLine={false} axisLine={false} tick={{ fill: '#71717a' }} />
+                          <YAxis fontSize={10} tickLine={false} axisLine={false} tick={{ fill: '#71717a' }} />
+                          <Tooltip 
+                            contentStyle={{ background: '#18181b', border: '1px solid #27272a', borderRadius: '12px', fontSize: '10px' }}
+                          />
+                          <Bar dataKey="volume" fill="#ff6b00" radius={[4, 4, 0, 0]} barSize={32} />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <h3 className="text-xs font-black text-zinc-500 uppercase tracking-[0.2em]">Relação Litros x Odômetro</h3>
+                        <p className="text-[10px] text-zinc-600 font-bold uppercase mt-1">Análise de volume por quilometragem</p>
+                      </div>
+                    </div>
+
+                    <div className="h-64 bg-zinc-950 border border-zinc-800 rounded-2xl p-6">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <ScatterChart margin={{ top: 20, right: 20, bottom: 20, left: 20 }}>
+                          <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#27272a" />
+                          <XAxis 
+                            type="number" 
+                            dataKey="odometer" 
+                            name="Odômetro" 
+                            unit="km" 
+                            fontSize={10} 
+                            tickLine={false} 
+                            axisLine={false} 
+                            tick={{ fill: '#71717a' }} 
+                            domain={['auto', 'auto']}
+                          />
+                          <YAxis 
+                            type="number" 
+                            dataKey="quantity" 
+                            name="Quantidade" 
+                            unit="L" 
+                            fontSize={10} 
+                            tickLine={false} 
+                            axisLine={false} 
+                            tick={{ fill: '#71717a' }} 
+                          />
+                          <Tooltip 
+                            cursor={{ strokeDasharray: '3 3' }}
+                            contentStyle={{ background: '#18181b', border: '1px solid #27272a', borderRadius: '12px', fontSize: '10px' }}
+                          />
+                          <Scatter name="Abastecimentos" data={vehicleFuel.map(f => ({ ...f, quantity: f.quantity, odometer: f.odometer }))} fill="#ff6b00" />
+                        </ScatterChart>
+                      </ResponsiveContainer>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4 col-span-full">
+                      <div className="p-4 bg-zinc-900 border border-zinc-800 rounded-2xl">
+                        <p className="text-[9px] font-black text-zinc-500 uppercase tracking-widest mb-1">Total Abastecido</p>
+                        <p className="text-xl font-black text-white tabular-nums">
+                          {vehicleFuel.reduce((acc, f) => acc + f.quantity, 0).toLocaleString()} <span className="text-xs text-zinc-500">L</span>
+                        </p>
+                      </div>
+                      <div className="p-4 bg-zinc-900 border border-zinc-800 rounded-2xl">
+                        <p className="text-[9px] font-black text-zinc-500 uppercase tracking-widest mb-1">Média de Abastecimento</p>
+                        <p className="text-xl font-black text-white tabular-nums">
+                          {vehicleFuel.length > 0 
+                            ? Math.round(vehicleFuel.reduce((acc, f) => acc + f.quantity, 0) / vehicleFuel.length) 
+                            : 0} <span className="text-xs text-zinc-500">L</span>
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-between pt-4 border-t border-zinc-800/80">
+                      <div>
+                        <h3 className="text-xs font-black text-zinc-500 uppercase tracking-[0.2em]">Histórico de Variação de Odômetro</h3>
+                        <p className="text-[10px] text-zinc-600 font-bold uppercase mt-1">KM percorrido entre abastecimentos sucessivos</p>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                      {/* Stats Column 1 */}
+                      <div className="p-4 bg-zinc-900 border border-zinc-800 rounded-2xl flex flex-col justify-center">
+                        <p className="text-[9px] font-black text-zinc-500 uppercase tracking-widest mb-1">Média de KM entre Abastecimentos</p>
+                        <p className="text-xl font-black text-brand-accent tabular-nums flex items-baseline gap-1">
+                          {odometerData.average > 0 ? (
+                            <>
+                              {odometerData.average.toLocaleString('pt-BR')} <span className="text-xs text-zinc-500">km</span>
+                            </>
+                          ) : '---'}
+                        </p>
+                        <span className="text-[8px] text-zinc-600 font-bold uppercase tracking-wider mt-1">Reflete a autonomia real atual do veículo</span>
+                      </div>
+                      
+                      {/* Stats Column 2 */}
+                      <div className="p-4 bg-zinc-900 border border-zinc-800 rounded-2xl flex flex-col justify-center">
+                        <p className="text-[9px] font-black text-zinc-500 uppercase tracking-widest mb-1">Maior Intervalo Registrado</p>
+                        <p className="text-xl font-black text-white tabular-nums flex items-baseline gap-1">
+                          {odometerData.max > 0 ? (
+                            <>
+                              {odometerData.max.toLocaleString('pt-BR')} <span className="text-xs text-zinc-500">km</span>
+                            </>
+                          ) : '---'}
+                        </p>
+                        <span className="text-[8px] text-zinc-600 font-bold uppercase tracking-wider mt-1">Distância máxima percorrida com um tanque</span>
+                      </div>
+
+                      {/* Stats Column 3 */}
+                      <div className="p-4 bg-zinc-900 border border-zinc-800 rounded-2xl flex flex-col justify-center">
+                        <p className="text-[9px] font-black text-zinc-500 uppercase tracking-widest mb-1">Último Odômetro na Bomba</p>
+                        <p className="text-xl font-black text-white tabular-nums flex items-baseline gap-1">
+                          {vehicleFuel.length > 0 ? (
+                            <>
+                              {vehicleFuel[0].odometer.toLocaleString('pt-BR')} <span className="text-xs text-zinc-500">km</span>
+                            </>
+                          ) : '---'}
+                        </p>
+                        <span className="text-[8px] text-zinc-600 font-bold uppercase tracking-wider mt-1">Diferença de {(vehicle.currentOdometer - (vehicleFuel[0]?.odometer || 0)).toLocaleString('pt-BR')} km para o painel</span>
+                      </div>
+                    </div>
+
+                    {odometerData.validRuns.length > 0 ? (
+                      <div className="h-64 bg-zinc-950 border border-zinc-800 rounded-2xl p-6 relative">
+                        <div className="absolute right-6 top-6 flex items-center gap-2">
+                          <span className="w-2 h-2 rounded-full bg-brand-accent ring-4 ring-brand-accent/25 animate-pulse" />
+                          <span className="text-[8px] font-black text-zinc-500 uppercase tracking-widest">Traçado de Consumo (km)</span>
+                        </div>
+                        <ResponsiveContainer width="100%" height="100%">
+                          <AreaChart data={odometerData.validRuns}>
+                            <defs>
+                              <linearGradient id="colorKm" x1="0" y1="0" x2="0" y2="1">
+                                <stop offset="5%" stopColor="#ff6b00" stopOpacity={0.2}/>
+                                <stop offset="95%" stopColor="#ff6b00" stopOpacity={0}/>
+                              </linearGradient>
+                            </defs>
+                            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#27272a" />
+                            <XAxis dataKey="date" fontSize={10} tickLine={false} axisLine={false} tick={{ fill: '#71717a' }} />
+                            <YAxis fontSize={10} tickLine={false} axisLine={false} tick={{ fill: '#71717a' }} unit=" km" />
+                            <Tooltip 
+                              contentStyle={{ background: '#18181b', border: '1px solid #27272a', borderRadius: '12px', fontSize: '10px' }}
+                              labelClassName="text-white font-black"
+                            />
+                            <Area type="monotone" dataKey="kmTraveled" name="KM entre Reabastecimentos" stroke="#ff6b00" fillOpacity={1} fill="url(#colorKm)" strokeWidth={2.5} />
+                          </AreaChart>
+                        </ResponsiveContainer>
+                      </div>
+                    ) : (
+                      <div className="p-8 bg-zinc-950 border border-zinc-850 rounded-2xl border-dashed text-center">
+                        <AlertCircle className="mx-auto text-zinc-600 mb-2" size={20} />
+                        <p className="text-[10px] font-black text-zinc-500 uppercase tracking-widest">Dados de Abastecimentos Insuficientes</p>
+                        <p className="text-[9px] text-zinc-600 font-bold uppercase mt-1">Registre pelo menos dois abastecimentos com odometrias crescentes para traçar a variação de Km.</p>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
-            </div>
-          ) : (
-            <div className="space-y-6 animate-in fade-in zoom-in-95 duration-300">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h3 className="text-xs font-black text-zinc-500 uppercase tracking-[0.2em]">Consumo Mensal de Diesel</h3>
-                  <p className="text-[10px] text-zinc-600 font-bold uppercase mt-1">Análise de volume por período</p>
-                </div>
-              </div>
-              
-              <div className="h-64 bg-zinc-950 border border-zinc-800 rounded-2xl p-6">
-                <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={
-                      // Group fuel by month
-                      Object.values(vehicleFuel.reduce((acc: any, log) => {
-                        if (!log.timestamp) return acc;
-                        const month = format(parseISO(log.timestamp), 'MMM', { locale: ptBR });
-                        if (!acc[month]) acc[month] = { name: month, volume: 0 };
-                        acc[month].volume += log.quantity;
-                        return acc;
-                      }, {}))
-                    }>
-                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#27272a" />
-                    <XAxis dataKey="name" fontSize={10} tickLine={false} axisLine={false} tick={{ fill: '#71717a' }} />
-                    <YAxis fontSize={10} tickLine={false} axisLine={false} tick={{ fill: '#71717a' }} />
-                    <Tooltip 
-                      contentStyle={{ background: '#18181b', border: '1px solid #27272a', borderRadius: '12px', fontSize: '10px' }}
-                    />
-                    <Bar dataKey="volume" fill="#f59e0b" radius={[4, 4, 0, 0]} barSize={32} />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-
-              <div className="flex items-center justify-between">
-                <div>
-                  <h3 className="text-xs font-black text-zinc-500 uppercase tracking-[0.2em]">Relação Litros x Odômetro</h3>
-                  <p className="text-[10px] text-zinc-600 font-bold uppercase mt-1">Análise de volume por quilometragem</p>
-                </div>
-              </div>
-
-              <div className="h-64 bg-zinc-950 border border-zinc-800 rounded-2xl p-6">
-                <ResponsiveContainer width="100%" height="100%">
-                  <ScatterChart margin={{ top: 20, right: 20, bottom: 20, left: 20 }}>
-                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#27272a" />
-                    <XAxis 
-                      type="number" 
-                      dataKey="odometer" 
-                      name="Odômetro" 
-                      unit="km" 
-                      fontSize={10} 
-                      tickLine={false} 
-                      axisLine={false} 
-                      tick={{ fill: '#71717a' }} 
-                      domain={['auto', 'auto']}
-                    />
-                    <YAxis 
-                      type="number" 
-                      dataKey="quantity" 
-                      name="Quantidade" 
-                      unit="L" 
-                      fontSize={10} 
-                      tickLine={false} 
-                      axisLine={false} 
-                      tick={{ fill: '#71717a' }} 
-                    />
-                    <Tooltip 
-                      cursor={{ strokeDasharray: '3 3' }}
-                      contentStyle={{ background: '#18181b', border: '1px solid #27272a', borderRadius: '12px', fontSize: '10px' }}
-                    />
-                    <Scatter name="Abastecimentos" data={vehicleFuel.map(f => ({ ...f, quantity: f.quantity, odometer: f.odometer }))} fill="#f59e0b" />
-                  </ScatterChart>
-                </ResponsiveContainer>
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div className="p-4 bg-zinc-800 border border-zinc-700 rounded-xl">
-                  <p className="text-[9px] font-black text-zinc-500 uppercase tracking-widest mb-1">Total Abastecido</p>
-                  <p className="text-xl font-black text-white tabular-nums">
-                    {vehicleFuel.reduce((acc, f) => acc + f.quantity, 0).toLocaleString()} <span className="text-xs text-zinc-500">L</span>
-                  </p>
-                </div>
-                <div className="p-4 bg-zinc-800 border border-zinc-700 rounded-xl">
-                  <p className="text-[9px] font-black text-zinc-500 uppercase tracking-widest mb-1">Média de Abastecimento</p>
-                  <p className="text-xl font-black text-white tabular-nums">
-                    {vehicleFuel.length > 0 
-                      ? Math.round(vehicleFuel.reduce((acc, f) => acc + f.quantity, 0) / vehicleFuel.length) 
-                      : 0} <span className="text-xs text-zinc-500">L</span>
-                  </p>
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
       <Modal 
         isOpen={isChecklistModalOpen} 
@@ -1340,6 +2271,76 @@ export const VehicleDetail = memo(({ vehicle, maintenanceHistory, fuelHistory, e
         title="Confirmar Exclusão"
         message="Tem certeza que deseja excluir este item definitivamente? Esta ação não pode ser revertida."
       />
+
+      <ConfirmModal 
+        isOpen={soldConfirmOpen}
+        onClose={() => setSoldConfirmOpen(false)}
+        onConfirm={processMarkAsSold}
+        title="Confirmar Venda do Veículo"
+        message={`Tem certeza que deseja marcar o veículo ${vehicle.plate} como VENDIDO? Ele será removido da lista de ativos operacionais.`}
+      />
+
+      <AnimatePresence>
+        {innerMaintenanceForm?.isOpen && (
+          <div className="fixed inset-0 z-[120] flex items-center justify-center p-4 sm:p-6 bg-black/90 backdrop-blur-md" id="nested-maintenance-portal">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setInnerMaintenanceForm(null)}
+              className="absolute inset-0 cursor-pointer"
+            />
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95, y: 15 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 15 }}
+              transition={{ type: 'spring', duration: 0.4 }}
+              className="relative w-full max-w-4xl max-h-[90vh] bg-zinc-950 border border-zinc-800/80 rounded-[2rem] flex flex-col overflow-hidden shadow-2xl z-10"
+              id="nested-maintenance-body"
+            >
+              {/* Modal Header */}
+              <div className="flex items-center justify-between p-6 border-b border-zinc-850 bg-zinc-950/90 backdrop-blur-md sticky top-0 z-10">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-2xl bg-amber-500/10 flex items-center justify-center text-amber-500 border border-amber-500/25">
+                    <Wrench size={18} className="animate-pulse" />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-black text-white uppercase tracking-wider">
+                      {innerMaintenanceForm.initialData?.id ? 'Editar Ordem de Serviço' : 'Registrar Nova Ordem de Serviço'}
+                    </h3>
+                    <p className="text-[9px] text-zinc-500 font-bold uppercase tracking-widest mt-1">
+                      DM Turismo • Terminal Mecânico Proativo
+                    </p>
+                  </div>
+                </div>
+                <button 
+                  onClick={() => setInnerMaintenanceForm(null)}
+                  className="p-2 bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-white rounded-xl transition-all border border-zinc-800 hover:border-zinc-700 cursor-pointer"
+                  title="Fechar"
+                >
+                  <X size={15} />
+                </button>
+              </div>
+
+              {/* Form Content */}
+              <div className="flex-1 overflow-y-auto p-6 sm:p-8">
+                <MaintenanceForm 
+                  onSubmit={async (data: any) => {
+                    if (onSaveMaintenance) {
+                      await onSaveMaintenance(data);
+                      setInnerMaintenanceForm(null);
+                    }
+                  }}
+                  loading={isSavingMaintenance}
+                  vehicles={vehicles.length > 0 ? vehicles : [vehicle]}
+                  initialData={innerMaintenanceForm.initialData}
+                  maintenanceHistory={maintenanceHistory}
+                />
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 });

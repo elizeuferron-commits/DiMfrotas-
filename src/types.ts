@@ -7,6 +7,7 @@ export type UserRole =
   | 'Limpeza / Conservação' 
   | 'Visitante'
   | 'Aguardando Liberação'
+  | 'Pendente de Liberação'
   | 'admin';
 
 export interface UserProfile {
@@ -14,15 +15,25 @@ export interface UserProfile {
   email: string;
   displayName: string;
   role: UserRole;
+  requestedRole?: UserRole;
   photoURL?: string;
   permissions?: string[];
+  lastActive?: string;
+}
+
+export interface VehiclePreventiveKMRoute {
+  id: string;
+  routeName: string;
+  kmInterval: number;
+  lastKM: number;
+  nextDueKM: number;
 }
 
 export interface Vehicle {
   id: string;
   plate: string;
   model: string;
-  type: 'van' | 'bus';
+  type: 'van' | 'bus' | 'microbus';
   capacity: number;
   currentOdometer: number;
   factoryYear: string;
@@ -40,8 +51,10 @@ export interface Vehicle {
   lastMaintenanceDate?: string;
   lastMaintenanceKM?: number;
   photoUrl?: string;
-  status: 'available' | 'maintenance' | 'trip';
+  status: 'available' | 'maintenance' | 'trip' | 'sold';
+  featured?: boolean;
   updatedAt: string;
+  preventiveKMConfig?: VehiclePreventiveKMRoute[];
 }
 
 export interface FinancialTransaction {
@@ -133,6 +146,8 @@ export interface MaintenanceLog {
   nextPreventiveMaintenanceDate?: string;
   createdAt?: any;
   attachments?: { name: string; url: string; type: 'image' | 'pdf' | 'word' | 'excel' }[];
+  partsReplaced?: string;
+  provider?: string;
   checklist?: {
     oilChanged: boolean;
     filtersChanged: boolean;
@@ -155,6 +170,7 @@ export interface StockItem {
   quantity: number;
   unit: string;
   minQuantity: number;
+  vehicleType?: 'ÔNIBUS' | 'MICRO-ÔNIBUS' | 'VAN' | 'OUTROS';
 }
 
 export interface FuelEntry {
@@ -192,6 +208,14 @@ export interface Stop {
   arrivalTime: string;
 }
 
+export interface TripObservation {
+  id: string;
+  type: 'complaint' | 'compliment' | 'lost_found' | 'improvement';
+  text: string;
+  author: string;
+  createdAt: string;
+}
+
 export interface Trip {
   id: string;
   vehicleId: string;
@@ -213,6 +237,12 @@ export interface Trip {
   osNumber?: string;
   type?: string;
   createdAt?: any;
+  observations?: TripObservation[];
+  accommodation?: 'Por Conta' | 'DM' | 'AM' | 'Cliente' | 'Terceiros' | string;
+  meals?: 'Por Conta' | 'DM' | 'AM' | 'Cliente' | 'Terceiros' | string;
+  tripValue?: number;
+  client?: string;
+  paymentStatus?: string;
 }
 
 export interface Journey {

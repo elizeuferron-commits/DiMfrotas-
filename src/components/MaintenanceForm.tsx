@@ -23,12 +23,15 @@ import { AttachmentViewer } from './AttachmentViewer';
 /**
  * Versão atualizada do formulário de manutenção com suporte a anexos e checklist técnico.
  */
-export const MaintenanceForm = ({ onSubmit, loading, vehicles, initialData }: any) => {
+export const MaintenanceForm = ({ onSubmit, loading, vehicles, initialData, maintenanceHistory = [] }: any) => {
   const [attachments, setAttachments] = useState<{ name: string; url: string; type: 'image' | 'pdf' | 'word' | 'excel' }[]>(initialData?.attachments || []);
   const [isAddingAttachment, setIsAddingAttachment] = useState(false);
   const [newAttachment, setNewAttachment] = useState({ name: '', type: 'image' as 'image' | 'pdf' | 'word' | 'excel', url: '' });
   const [selectedVehicleId, setSelectedVehicleId] = useState(initialData?.vehicleId || '');
   const [description, setDescription] = useState(initialData?.description || '');
+  const [maintType, setMaintType] = useState(initialData?.type || 'preventive');
+  const [cost, setCost] = useState(initialData?.cost !== undefined ? String(initialData.cost) : '');
+  const [isCostManuallyEdited, setIsCostManuallyEdited] = useState(initialData?.cost !== undefined);
   const [checklist, setChecklist] = useState(initialData?.checklist || {
     oilChanged: false,
     filtersChanged: false,
@@ -44,6 +47,48 @@ export const MaintenanceForm = ({ onSubmit, loading, vehicles, initialData }: an
   });
 
   const selectedVehicle = vehicles?.find((v: any) => v.id === selectedVehicleId);
+
+  // Suggest estimated cost based on historical maintenance of the same type for the selected vehicle
+  const costSuggestion = React.useMemo(() => {
+    if (!selectedVehicleId || !maintType || !maintenanceHistory || maintenanceHistory.length === 0) {
+      return null;
+    }
+
+    const relevantLogs = maintenanceHistory.filter((log: any) => 
+      log.vehicleId === selectedVehicleId && 
+      log.type === maintType && 
+      log.cost > 0
+    );
+
+    if (relevantLogs.length === 0) {
+      return null;
+    }
+
+    const total = relevantLogs.reduce((sum: number, log: any) => sum + (log.cost || 0), 0);
+    const average = total / relevantLogs.length;
+
+    // Get the latest completed log of this type
+    const sortedLogs = [...relevantLogs].sort((a: any, b: any) => {
+      const dateA = new Date(a.completedAt || a.scheduledDate).getTime();
+      const dateB = new Date(b.completedAt || b.scheduledDate).getTime();
+      return dateB - dateA;
+    });
+
+    const latest = sortedLogs[0]?.cost || 0;
+
+    return {
+      average,
+      latest,
+      count: relevantLogs.length
+    };
+  }, [selectedVehicleId, maintType, maintenanceHistory]);
+
+  // Handle automatic pre-fill suggestions if the user has not manually modified the cost field yet
+  React.useEffect(() => {
+    if (!initialData?.id && !isCostManuallyEdited && costSuggestion) {
+      setCost(costSuggestion.average.toFixed(2));
+    }
+  }, [costSuggestion, isCostManuallyEdited, initialData]);
 
   const MAINTENANCE_ITEMS = {
     van: [
@@ -164,7 +209,8 @@ export const MaintenanceForm = ({ onSubmit, loading, vehicles, initialData }: an
           icon={Wrench} 
           name="type" 
           required
-          defaultValue={initialData?.type}
+          value={maintType}
+          onChange={(e: any) => setMaintType(e.target.value)}
           options={[
             { value: 'preventive', label: 'Preventiva' },
             { value: 'corrective', label: 'Corretiva' }
@@ -277,7 +323,59 @@ export const MaintenanceForm = ({ onSubmit, loading, vehicles, initialData }: an
             </div>
           </div>
           <div className="space-y-4">
-            <Input label="Custo Total (R$)" type="number" step="0.01" placeholder="1500.00" icon={Hash} name="cost" defaultValue={initialData?.cost} />
+            <Input 
+              label="Custo Total (R$)" 
+              type="number" 
+              step="0.01" 
+              placeholder="1500.00" 
+              icon={Hash} 
+              name="cost" 
+              value={cost} 
+              onChange={(e: any) => {
+                setCost(e.target.value);
+                setIsCostManuallyEdited(true);
+              }}
+            />
+            {costSuggestion && (
+              <div className="p-3 bg-brand-accent/5 border border-brand-accent/20 rounded-2xl flex flex-col gap-2">
+                <div className="flex items-center gap-1.5 text-[8.5px] font-black text-brand-accent uppercase tracking-wider">
+                  <Sparkles size={11} className="animate-pulse shrink-0" />
+                  <span>Custo Sugerido ({costSuggestion.count} OS ant.)</span>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCost(costSuggestion.average.toFixed(2));
+                      setIsCostManuallyEdited(true);
+                    }}
+                    className={cn(
+                      "px-2.5 py-1.5 rounded-lg border text-[8px] font-black uppercase transition-all whitespace-nowrap cursor-pointer",
+                      parseFloat(cost || '0').toFixed(2) === costSuggestion.average.toFixed(2)
+                        ? "bg-brand-accent/20 border-brand-accent text-brand-accent shadow-sm"
+                        : "bg-zinc-950 border-zinc-800 text-zinc-500 hover:border-zinc-700 hover:text-zinc-300"
+                    )}
+                  >
+                    Média: R$ {costSuggestion.average.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCost(costSuggestion.latest.toFixed(2));
+                      setIsCostManuallyEdited(true);
+                    }}
+                    className={cn(
+                      "px-2.5 py-1.5 rounded-lg border text-[8px] font-black uppercase transition-all whitespace-nowrap cursor-pointer",
+                      parseFloat(cost || '0').toFixed(2) === costSuggestion.latest.toFixed(2)
+                        ? "bg-brand-accent/20 border-brand-accent text-brand-accent shadow-sm"
+                        : "bg-zinc-950 border-zinc-800 text-zinc-500 hover:border-zinc-700 hover:text-zinc-300"
+                    )}
+                  >
+                    Última: R$ {costSuggestion.latest.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </button>
+                </div>
+              </div>
+            )}
             
             <div className="p-4 bg-zinc-900/30 border border-zinc-800 rounded-2xl">
               <div className="flex items-center gap-2 mb-3">

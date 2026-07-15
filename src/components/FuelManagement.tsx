@@ -1,27 +1,43 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { 
   Plus, 
   Package, 
   MapPin, 
   Fuel, 
-  AlertTriangle 
+  AlertTriangle,
+  Printer,
+  Calendar,
+  X
 } from 'lucide-react';
-import { format, parseISO } from 'date-fns';
+import { format, parseISO, isWithinInterval, startOfDay, endOfDay, subMonths, subDays } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
+import { 
+  LineChart, 
+  Line, 
+  XAxis, 
+  YAxis, 
+  CartesianGrid, 
+  Tooltip, 
+  ResponsiveContainer 
+} from 'recharts';
 import { motion } from 'framer-motion';
 import { Card } from './Cards';
 import { cn } from '../lib/utils';
-import { Vehicle, FuelTank, FuelLog, FuelEntry } from '../types';
+import { Vehicle, FuelTank, FuelLog, FuelEntry, Employee } from '../types';
+import { Modal, Input, Button } from './UI';
 
 interface FuelManagementProps {
   fuelTanks: FuelTank[];
   recentFuelLogs: FuelLog[];
   fuelEntries: FuelEntry[];
   vehicles: Vehicle[];
+  employees: Employee[];
   onOpenTankModal: () => void;
   onOpenRefillModal: () => void;
   onOpenExternalFuelModal: () => void;
   onOpenFuelModal: () => void;
+  onEditFuelLog: (log: FuelLog) => void;
+  onDeleteFuelLog: (logId: string) => void;
 }
 
 export const FuelManagement: React.FC<FuelManagementProps> = ({
@@ -29,19 +45,142 @@ export const FuelManagement: React.FC<FuelManagementProps> = ({
   recentFuelLogs,
   fuelEntries,
   vehicles,
+  employees,
   onOpenTankModal,
   onOpenRefillModal,
   onOpenExternalFuelModal,
-  onOpenFuelModal
+  onOpenFuelModal,
+  onEditFuelLog,
+  onDeleteFuelLog
 }) => {
+  const [isPrintModalOpen, setIsPrintModalOpen] = useState(false);
+  const [startDate, setStartDate] = useState(format(subDays(new Date(), 30), 'yyyy-MM-dd'));
+  const [endDate, setEndDate] = useState(format(new Date(), 'yyyy-MM-dd'));
+  const [selectedLog, setSelectedLog] = useState<FuelLog | null>(null);
+
+  // Gráfico de Consumo Mensal por Frota (Últimos 6 meses)
+  const consumptionChartData = React.useMemo(() => {
+    // Generate last 6 months in chronological order
+    const last6Months = Array.from({ length: 6 }).map((_, i) => {
+      const date = subMonths(new Date(), i);
+      return {
+        key: format(date, 'yyyy-MM'),
+        label: format(date, 'MMM/yy', { locale: ptBR }),
+      };
+    }).reverse();
+
+    return last6Months.map(month => {
+      let busLiters = 0;
+      let vanLiters = 0;
+      let totalLiters = 0;
+
+      recentFuelLogs.forEach(log => {
+        if (!log.timestamp) return;
+        try {
+          const logDate = parseISO(log.timestamp);
+          const logMonthKey = format(logDate, 'yyyy-MM');
+
+          if (logMonthKey === month.key) {
+            const vehicle = vehicles.find(v => v.id === log.vehicleId);
+            const qty = Number(log.quantity) || 0;
+            
+            if (vehicle?.type === 'bus') {
+              busLiters += qty;
+            } else if (vehicle?.type === 'van') {
+              vanLiters += qty;
+            } else {
+              // Standard fallback
+              busLiters += qty;
+            }
+            totalLiters += qty;
+          }
+        } catch (e) {
+          console.error('[Fuel Chart] Parse timestamp error: ', e);
+        }
+      });
+
+      return {
+        month: month.label.toUpperCase(),
+        'Ônibus': Math.round(busLiters),
+        'Vans': Math.round(vanLiters),
+        'Total': Math.round(totalLiters)
+      };
+    });
+  }, [recentFuelLogs, vehicles]);
+
+  const handleDownloadPDF = async () => {
+    const jsPDF = (await import('jspdf')).default;
+    const autoTable = (await import('jspdf-autotable')).default;
+    const doc = new jsPDF();
+    
+    // Header
+    doc.setFillColor(135, 206, 235); // Light Sky Blue
+    doc.rect(0, 0, 210, 30, 'F');
+    doc.setTextColor(0, 0, 0); // Black text for readability on Light Sky Blue
+    doc.setFontSize(22);
+    doc.text("DM TURISMO", 14, 15);
+    doc.setFontSize(10);
+    doc.text("prazer em viajar bem", 14, 22);
+
+    // Title
+    doc.setTextColor(0, 0, 0);
+    doc.setFontSize(16);
+    doc.text("Relatório de Abastecimento", 14, 40);
+    doc.setFontSize(10);
+    doc.text(`Período: ${startDate} a ${endDate}`, 14, 46);
+    
+    const tableColumn = ["Data", "Placa", "Hodômetro", "Diesel (L)", "Arla (L)", "Motorista", "Bomba"];
+    const tableRows: any[] = [];
+    
+    filteredLogs.forEach(log => {
+      const v = vehicles.find(v => v.id === log.vehicleId);
+      const d = employees?.find(e => e.id === log.driverId);
+      tableRows.push([
+          log.timestamp ? format(parseISO(log.timestamp), 'dd/MM HH:mm') : '---',
+          v?.plate || '---',
+          log.odometer?.toLocaleString() || '---',
+          log.quantity?.toLocaleString() || '0',
+          log.arlaQuantity?.toLocaleString() || '0',
+          d?.name || '---',
+          log.isExternal ? 'Externa' : 'Interna'
+      ]);
+    });
+    
+    autoTable(doc, {
+      head: [tableColumn],
+      body: tableRows,
+      startY: 55,
+      styles: { fontSize: 8, textColor: [0, 0, 0] },
+      headStyles: { fillColor: [135, 206, 235] }, // Light Sky Blue
+      alternateRowStyles: { fillColor: [240, 240, 240] } // Light gray shading
+    });
+    
+    doc.save(`relatorio_abastecimento_${startDate}_${endDate}.pdf`);
+    setIsPrintModalOpen(false);
+  };
+
+  const handlePrint = () => {
+    window.print();
+    setIsPrintModalOpen(false);
+  };
+
+  const filteredLogs = recentFuelLogs.filter(log => {
+      if (!log.timestamp) return false;
+      const logDate = startOfDay(parseISO(log.timestamp));
+      return isWithinInterval(logDate, { 
+          start: startOfDay(parseISO(startDate)), 
+          end: endOfDay(parseISO(endDate)) 
+      });
+  });
+
   return (
     <div className="space-y-12 animate-in fade-in slide-in-from-bottom-4 duration-500">
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
         <div>
-          <h1 className="text-4xl font-black text-white tracking-tighter uppercase leading-none">Gestão de Combustível</h1>
+          <h1 className="text-4xl font-black text-white tracking-tighter uppercase leading-none">Gestão de Abastecimento</h1>
           <div className="text-zinc-500 font-black uppercase text-[10px] tracking-[0.3em] mt-3 flex items-center gap-2">
             <div className="w-2 h-2 bg-brand-accent rounded-full animate-pulse" />
-            Bomba de Abastecimento Interna DM
+            Bomba de Abastecimento Interna DM Turismo
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-4">
@@ -75,7 +214,6 @@ export const FuelManagement: React.FC<FuelManagementProps> = ({
           </button>
         </div>
       </div>
-
       {/* Summary Widgets */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
         <div className="p-8 bg-zinc-900 border border-zinc-800 rounded-3xl group hover:border-brand-accent/50 transition-all shadow-lg">
@@ -124,6 +262,92 @@ export const FuelManagement: React.FC<FuelManagementProps> = ({
            </div>
         </div>
       </div>
+
+      {/* Gráfico de Evolução do Consumo Mensal por Frota */}
+      <Card id="fuel-consumption-evolution-chart" className="p-8 bg-zinc-900 border border-zinc-800 rounded-3xl shadow-lg space-y-6">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-zinc-800 pb-4">
+          <div>
+            <h3 id="chart-title" className="font-black text-xs text-white uppercase tracking-widest">Evolução do Consumo Mensal por Frota</h3>
+            <p className="text-[10px] font-black text-zinc-500 uppercase mt-1 tracking-wider leading-none">
+              Consumo de Diesel S10 acumulado nos últimos 6 meses agrupado por tipo de frota (Ônibus e Vans)
+            </p>
+          </div>
+          <div className="flex items-center gap-6">
+            <div className="flex items-center gap-2">
+              <span className="w-3 h-3 rounded-full bg-brand-accent" />
+              <span className="text-[10px] font-black text-zinc-400 uppercase tracking-wider">Ônibus</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="w-3 h-3 rounded-full bg-orange-500/80" />
+              <span className="text-[10px] font-black text-zinc-400 uppercase tracking-wider">Vans</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="w-3 h-3 rounded-full bg-white/40" />
+              <span className="text-[10px] font-black text-zinc-500 uppercase tracking-wider">Total</span>
+            </div>
+          </div>
+        </div>
+
+        <div className="h-[280px] w-full pt-2">
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart data={consumptionChartData} margin={{ top: 10, right: 10, left: -20, bottom: 5 }}>
+              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#18181b" />
+              <XAxis 
+                dataKey="month" 
+                axisLine={false} 
+                tickLine={false} 
+                tick={{ fill: '#52525b', fontSize: 10, fontWeight: 900 }} 
+                dy={10}
+              />
+              <YAxis 
+                axisLine={false} 
+                tickLine={false} 
+                tick={{ fill: '#52525b', fontSize: 10, fontWeight: 900 }}
+                tickFormatter={(value) => `${value.toLocaleString('pt-BR')} L`}
+              />
+              <Tooltip 
+                contentStyle={{ 
+                  backgroundColor: '#09090b', 
+                  border: '1px solid #27272a', 
+                  borderRadius: '12px',
+                  fontSize: '10.5px',
+                  fontWeight: 'bold',
+                  textTransform: 'uppercase',
+                  color: '#fff'
+                }}
+                labelStyle={{ color: '#ff6b00', marginBottom: '4px' }}
+                itemStyle={{ padding: '2px 0', color: '#a1a1aa' }}
+                formatter={(value: any, name: any) => [`${value.toLocaleString('pt-BR')} Litros`, name]}
+              />
+              <Line 
+                type="monotone" 
+                dataKey="Ônibus" 
+                stroke="#ff6b00" 
+                strokeWidth={3} 
+                dot={{ fill: '#ff6b00', r: 4 }} 
+                activeDot={{ r: 6, strokeWidth: 0 }}
+              />
+              <Line 
+                type="monotone" 
+                dataKey="Vans" 
+                stroke="#f97316" 
+                strokeWidth={2} 
+                dot={{ fill: '#f97316', r: 3 }} 
+                activeDot={{ r: 5, strokeWidth: 0 }}
+              />
+              <Line 
+                type="monotone" 
+                dataKey="Total" 
+                stroke="#e4e4e7" 
+                strokeWidth={1.5} 
+                strokeDasharray="4 4"
+                dot={{ fill: '#e4e4e7', r: 2 }} 
+                activeDot={{ r: 4, strokeWidth: 0 }}
+              />
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      </Card>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
         {fuelTanks.map(tank => {
@@ -237,42 +461,73 @@ export const FuelManagement: React.FC<FuelManagementProps> = ({
                <Fuel size={16} className="text-brand-accent" />
                Abastecimentos (Saídas)
             </h2>
-            <span className="text-[10px] font-black text-zinc-600 uppercase tracking-widest">{recentFuelLogs.length} Registros</span>
+            <div className='flex gap-2 items-center'>
+                <button
+                    onClick={() => setIsPrintModalOpen(true)}
+                    className="flex items-center gap-2 px-3 py-1.5 bg-zinc-800 text-zinc-400 rounded-lg text-[10px] font-bold border border-zinc-700 hover:bg-zinc-700 transition-all"
+                >
+                    <Printer size={12} />
+                    Imprimir
+                </button>
+                <span className="text-[10px] font-black text-zinc-600 uppercase tracking-widest">{filteredLogs.length} Registros</span>
+            </div>
           </div>
-          <div className="space-y-3">
-            {recentFuelLogs.slice(0, 5).map(log => {
-              const v = vehicles.find(v => v.id === log.vehicleId);
-              return (
-                <div key={log.id} className="p-5 bg-zinc-900/40 border border-zinc-800 rounded-2xl flex justify-between items-center hover:bg-zinc-900/60 transition-all group">
-                  <div className="flex items-center gap-4">
-                    <div className="w-12 h-12 bg-zinc-800 rounded-xl flex items-center justify-center font-black text-brand-accent text-[10px] tracking-tight group-hover:bg-brand-accent group-hover:text-zinc-950 transition-colors">{v?.plate || '---'}</div>
-                    <div>
-                      <p className="text-xs font-black text-white uppercase">{v?.model || 'Desconhecido'}</p>
-                      <p className="text-[9px] text-zinc-500 font-bold uppercase mt-1">
-                        {log.timestamp ? format(parseISO(log.timestamp), 'dd MMM | HH:mm', { locale: ptBR }) : '---'}
-                      </p>
-                    </div>
-                  </div>
-                  <div className="text-right">
-                    <p className="text-sm font-black text-white tabular-nums">{log.quantity}L</p>
-                    {log.arlaQuantity && log.arlaQuantity > 0 && (
-                      <p className="text-[10px] font-black text-brand-accent tabular-nums tracking-tighter">+{log.arlaQuantity}L Arla</p>
-                    )}
-                    <p className={cn(
-                      "text-[9px] font-black uppercase mt-1 tracking-widest",
-                      log.isExternal ? "text-rose-400" : "text-rose-500/50"
-                    )}>
-                      {log.isExternal ? `Externo: ${log.location?.substring(0, 15)}...` : "Saída Operacional"}
-                    </p>
-                  </div>
-                </div>
-              );
-            })}
-            {recentFuelLogs.length === 0 && (
-              <div className="py-10 text-center bg-zinc-950/20 rounded-2xl border border-dashed border-zinc-900 text-[10px] font-black text-zinc-700 uppercase tracking-widest">Nenhuma saída registrada</div>
-            )}
+          <div className="bg-zinc-900/40 border border-zinc-800 rounded-2xl overflow-hidden">
+            <div className="max-h-[500px] overflow-y-auto">
+              <table className="w-full text-left text-[10px] font-bold text-zinc-400 uppercase tracking-wider">
+                <thead className="bg-zinc-900 sticky top-0">
+                  <tr>
+                    <th className="p-4">Data</th>
+                    <th className="p-4">Placa</th>
+                    <th className="p-4">Hodômetro</th>
+                    <th className="p-4">Diesel (L)</th>
+                    <th className="p-4">Arla (L)</th>
+                    <th className="p-4">Motorista</th>
+                    <th className="p-4">Bomba</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-zinc-800/50">
+                  {filteredLogs.map(log => {
+                    const v = vehicles.find(v => v.id === log.vehicleId);
+                    const d = employees?.find(e => e.id === log.driverId);
+                    return (
+                      <tr key={log.id} className="hover:bg-zinc-800/20 transition-colors cursor-pointer" onClick={() => setSelectedLog(log)}>
+                        <td className="p-4">{log.timestamp ? format(parseISO(log.timestamp), 'dd/MM HH:mm', { locale: ptBR }) : '---'}</td>
+                        <td className="p-4 text-white">{v?.plate || '---'}</td>
+                        <td className="p-4 tabular-nums">{log.odometer?.toLocaleString() || '---'}</td>
+                        <td className="p-4 tabular-nums">{log.quantity?.toLocaleString() || '0'}</td>
+                        <td className="p-4 tabular-nums">{log.arlaQuantity?.toLocaleString() || '0'}</td>
+                        <td className="p-4">{d?.name || '---'}</td>
+                        <td className="p-4">{log.isExternal ? 'Externa' : 'Interna'}</td>
+                      </tr>
+                    );
+                  })}
+                  {filteredLogs.length === 0 && (
+                    <tr>
+                      <td colSpan={7} className="p-10 text-center text-zinc-700">Nenhum registro para o período</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
+
+        <Modal isOpen={isPrintModalOpen} onClose={() => setIsPrintModalOpen(false)} title="Selecionar Período">
+            <div className='space-y-4 p-4'>
+                <Input label="Data Inicial" type="date" value={startDate} onChange={(e: any) => setStartDate(e.target.value)} />
+                <Input label="Data Final" type="date" value={endDate} onChange={(e: any) => setEndDate(e.target.value)} />
+                <Button onClick={handlePrint} className='w-full'>Imprimir Lista</Button>
+                <Button onClick={handleDownloadPDF} className='w-full bg-zinc-800 text-white'>PDF</Button>
+            </div>
+        </Modal>
+
+        <Modal isOpen={!!selectedLog} onClose={() => setSelectedLog(null)} title="Ações Abastecimento">
+            <div className="space-y-4 p-4">
+                <Button onClick={() => { selectedLog && onEditFuelLog(selectedLog); setSelectedLog(null); }} className="w-full">Editar</Button>
+                <Button onClick={() => { selectedLog && onDeleteFuelLog(selectedLog.id); setSelectedLog(null); }} className="w-full bg-rose-600 text-white">Excluir</Button>
+            </div>
+        </Modal>
 
         <div className="space-y-6">
           <div className="flex items-center justify-between border-b border-zinc-800 pb-4">

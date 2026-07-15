@@ -2,7 +2,7 @@ import { toast } from 'sonner';
 
 export const generateAPKDigital = (appUrl: string = window.location.origin, employeeName?: string) => {
   try {
-    const personalizedTitle = employeeName ? `DM PRO - ${employeeName.toUpperCase()}` : 'DM TURISMO - APK DIGITAL';
+    const personalizedTitle = employeeName ? `DM TURISMO PRO - ${employeeName.toUpperCase()}` : 'DM TURISMO - ATALHO DIGITAL';
     const personalizedMsg = employeeName 
       ? `Iniciando o terminal de logística personalizado para <strong>${employeeName}</strong>...`
       : 'Iniciando o terminal de logística e viagens em seu dispositivo móvel...';
@@ -16,7 +16,7 @@ export const generateAPKDigital = (appUrl: string = window.location.origin, empl
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap" rel="stylesheet">
     <style>
         :root {
-          --brand: #ff6b00;
+          --brand: #1a50f1;
           --bg: #09090b;
           --card: #18181b;
         }
@@ -33,7 +33,7 @@ export const generateAPKDigital = (appUrl: string = window.location.origin, empl
           text-align: center;
           padding: 20px;
           box-sizing: border-box;
-          background-image: radial-gradient(circle at top right, #ff6b0015, transparent), radial-gradient(circle at bottom left, #00d2ff10, transparent);
+          background-image: radial-gradient(circle at top right, #1a50f115, transparent), radial-gradient(circle at bottom left, #00d2ff10, transparent);
         }
         .card { 
           background: var(--card); 
@@ -125,7 +125,7 @@ export const generateAPKDigital = (appUrl: string = window.location.origin, empl
 </head>
 <body>
     <div class="card">
-        <div class="badge">Atalho Inteligente • DM Pro</div>
+        <div class="badge">Atalho Inteligente • DM Turismo</div>
         <div class="logo-container">DM</div>
         <h1>Instalar Terminal DM</h1>
         <p>Este arquivo é o seu acesso direto ao ecossistema corporativo DM Turismo. Siga os passos e transforme este site em um aplicativo no seu celular.</p>
@@ -134,7 +134,7 @@ export const generateAPKDigital = (appUrl: string = window.location.origin, empl
           <div class="instructions-title">💡 Como Ativar o Ícone Oficial:</div>
           <div class="step"><span class="step-num">01.</span> Clique no link abaixo para carregar o sistema.</div>
           <div class="step"><span class="step-num">02.</span> No navegador, procure por "Adicionar à Tela de Início".</div>
-          <div class="step"><span class="step-num">03.</span> O ícone da DM aparecerá junto aos seus outros apps.</div>
+          <div class="step"><span class="step-num">03.</span> O ícone da DM Turismo aparecerá junto aos seus outros apps.</div>
         </div>
 
         <a href="${appUrl}" class="btn">Ativar Aplicativo Agora</a>
@@ -177,7 +177,7 @@ export const shareAppDirectly = async (appUrl: string = window.location.origin) 
     try {
       await navigator.share({
         title: 'DM Turismo Pro',
-        text: 'Acesse o sistema de logística e viagens DM Turismo.',
+        text: 'Acesse o sistema de logística e faturamento DM Turismo.',
         url: appUrl,
       });
     } catch (error) {

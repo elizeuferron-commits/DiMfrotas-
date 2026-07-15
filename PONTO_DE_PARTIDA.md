@@ -89,3 +89,13 @@ O sistema opera como um ecossistema de instalação única, preparado para todas
 - **Estabilização de Mídia**: Otimização dos componentes `Dashboard` e `MediaHub` para evitar interrupções em pedidos de reprodução (`play()`) em navegadores modernos, garantindo fluidez no mural de mídias.
 - **Limpeza de Modo Sombra**: Remoção completa de marcas d'água e referências de desenvolvimento ".shadow", consolidando o sistema para uso em produção.
 - **Refinamento de Dashboard**: Limpeza visual e remoção de widgets redundantes para foco total nas métricas operacionais e alertas de frota.
+
+## 🌑 Atualizações Recentes (03/06/2026) - v1.8.0 "Optimization & Status Glow"
+- **Mapeador Avançado de Otimizações Operacionais (Aba Criador/Sugestões)**:
+  - **Dossiê Diagnóstico Estruturado**: Inclusão de um catálogo reativo (`<OptimizationSuggestions />`) na ferramenta Criador expondo gargalos analógicos clássicos versus a eficiência digital de faturamento, controle de diesel, agendamento em lote e relatórios.
+  - **Simulador Interativo de Atrito**: Gráficos de barra informativos que ilustram as taxas de economia de tempo na operação em tempo real (com reduções simuladas de até 95%).
+  - **Engrenagem de Brainstorm IA**: Integração com Gemini 3.5 Flash gerando esquemas estruturados estruturando propostas gerenciais customizadas ao toque de um botão.
+- **Micro-Sinalizações Ópticas Pulsantes nos Status de Frota**:
+  - **Transição Cênica Suave**: Configuração de transições com interpolação de longa duração (`duration-700 ease-in-out`) para as mudanças de cor nos sinalizadores de status da frota.
+  - **Sinalizadores LED Ativos**: Inclusão de bullets vibrantes pulsando em animação sincronizada (`animate-ping`) de acordo com o status atual do veículo (Liberado, Manutenção ou Afastado) nas telas `<FleetList />` e `<VehicleDetail />` para atenção imediata do gestor da garagem.
+

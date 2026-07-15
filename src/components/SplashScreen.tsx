@@ -14,20 +14,21 @@ export const SplashScreen = () => {
         {/* Animated Logo Container */}
         <div className="relative mb-8">
           <div className="absolute inset-0 bg-brand-accent/20 blur-3xl rounded-full scale-150 animate-pulse" />
-          <div className="w-32 h-32 bg-zinc-900 border-2 border-brand-accent/50 rounded-[40px] flex items-center justify-center shadow-2xl relative overflow-hidden group">
-            {/* Glossy Effect */}
-            <div className="absolute inset-0 bg-gradient-to-tr from-transparent via-white/5 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-1000" />
-            <Bus size={64} className="text-brand-accent drop-shadow-lg" />
+          <div className="w-36 h-36 flex items-center justify-center relative">
+            <img src="/logo_dm.svg" alt="DM Turismo" className="w-full h-full object-contain filter drop-shadow-[0_0_15px_rgba(255,107,0,0.2)]" referrerPolicy="no-referrer" />
           </div>
         </div>
 
-        {/* Branding */}
+        {/* Decorative Tagline or Logo Text */}
         <div className="text-center space-y-2">
           <h1 className="text-5xl font-black text-white uppercase tracking-tighter italic">
             DM <span className="text-brand-accent">Turismo</span>
           </h1>
           <p className="text-zinc-500 font-extrabold text-[10px] uppercase tracking-[0.4em] ml-1">
-            Gestão Operacional Pro
+            Inteligência Operacional Pro
+          </p>
+          <p className="text-zinc-600 font-medium text-[9px] uppercase tracking-widest italic mt-1">
+            Prazer em viajar bem
           </p>
         </div>
 

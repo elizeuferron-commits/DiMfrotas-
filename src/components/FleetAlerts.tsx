@@ -51,9 +51,18 @@ export const FleetAlerts: React.FC<FleetAlertsProps> = ({ vehicles, onVehicleCli
     }
 
     // 3. Manutenção Preventiva (Data & KM)
+    const savedMaintDays = typeof window !== 'undefined' ? localStorage.getItem('dm_alert_maint_days') : null;
+    const alertMaintDaysLimit = savedMaintDays ? parseInt(savedMaintDays, 10) : 30;
+
+    const savedMaintKm = typeof window !== 'undefined' ? localStorage.getItem('dm_alert_maint_km') : null;
+    const alertMaintKmLimit = savedMaintKm ? parseInt(savedMaintKm, 10) : 3000;
+
+    const savedOilKm = typeof window !== 'undefined' ? localStorage.getItem('dm_alert_oil_km') : null;
+    const alertOilKmLimit = savedOilKm ? parseInt(savedOilKm, 10) : 2000;
+
     if (isMaintenance && v.nextPreventiveMaintenanceDate) {
       const days = differenceInDays(parseISO(v.nextPreventiveMaintenanceDate), today);
-      if (days <= 30) {
+      if (days <= alertMaintDaysLimit) {
         items.push({
           id: `${v.id}-maint-date`,
           vehicle: v,
@@ -61,14 +70,14 @@ export const FleetAlerts: React.FC<FleetAlertsProps> = ({ vehicles, onVehicleCli
           label: 'Manutenção Prev. (Data)',
           date: v.nextPreventiveMaintenanceDate,
           days,
-          priority: days <= 7 ? 'high' : 'medium'
+          priority: days <= Math.ceil(alertMaintDaysLimit / 4) ? 'high' : 'medium'
         });
       }
     }
 
     if (isMaintenance && v.nextMaintenanceKM) {
       const kmRemaining = v.nextMaintenanceKM - v.currentOdometer;
-      if (kmRemaining <= 3000) {
+      if (kmRemaining <= alertMaintKmLimit) {
         items.push({
           id: `${v.id}-maint-km`,
           vehicle: v,
@@ -77,7 +86,7 @@ export const FleetAlerts: React.FC<FleetAlertsProps> = ({ vehicles, onVehicleCli
           date: new Date().toISOString(), // Fallback
           days: Math.floor(kmRemaining / 100), // Usado para ordenação aproximada
           kmRemaining,
-          priority: kmRemaining <= 1500 ? 'high' : 'medium'
+          priority: kmRemaining <= Math.ceil(alertMaintKmLimit / 2) ? 'high' : 'medium'
         });
       }
     }
@@ -85,7 +94,7 @@ export const FleetAlerts: React.FC<FleetAlertsProps> = ({ vehicles, onVehicleCli
     // 4. Troca de Óleo (KM)
     if (isMaintenance && v.nextOilChangeKM) {
       const kmRemaining = v.nextOilChangeKM - v.currentOdometer;
-      if (kmRemaining <= 2000) {
+      if (kmRemaining <= alertOilKmLimit) {
         items.push({
           id: `${v.id}-oil`,
           vehicle: v,
@@ -94,9 +103,37 @@ export const FleetAlerts: React.FC<FleetAlertsProps> = ({ vehicles, onVehicleCli
           date: new Date().toISOString(),
           days: Math.floor(kmRemaining / 50), // Prioridade alta na ordenação
           kmRemaining,
-          priority: kmRemaining <= 1000 ? 'high' : 'medium'
+          priority: kmRemaining <= Math.ceil(alertOilKmLimit / 2) ? 'high' : 'medium'
         });
       }
+    }
+
+    // 5. Rotas de Manutenção Preventiva Personalizadas por KM (Alerta de 80%)
+    if (isMaintenance && v.preventiveKMConfig && Array.isArray(v.preventiveKMConfig)) {
+      v.preventiveKMConfig.forEach((route) => {
+        const interval = Number(route.kmInterval || 0);
+        const lastKM = Number(route.lastKM || 0);
+        const nextDueKM = Number(route.nextDueKM || (lastKM + interval));
+        const currentOdometer = Number(v.currentOdometer || 0);
+
+        const distanceTraveled = currentOdometer - lastKM;
+        const pct = interval > 0 ? (distanceTraveled / interval) * 100 : 0;
+
+        if (pct >= 80) {
+          const kmRemaining = nextDueKM - currentOdometer;
+          items.push({
+            id: `${v.id}-route-${route.id}`,
+            vehicle: v,
+            type: 'route_preventive',
+            label: route.routeName || 'Revisão Preventiva',
+            date: new Date().toISOString(),
+            days: Math.floor(kmRemaining / 100),
+            kmRemaining,
+            pct: Math.min(100, Math.round(pct)),
+            priority: pct >= 100 ? 'high' : 'medium'
+          });
+        }
+      });
     }
 
     return items;
@@ -144,6 +181,7 @@ export const FleetAlerts: React.FC<FleetAlertsProps> = ({ vehicles, onVehicleCli
                      {alert.type === 'insurance' && <ShieldCheck size={20} className="stroke-[2.5]" />}
                      {alert.type === 'maintenance' && <Wrench size={20} className="stroke-[2.5]" />}
                      {alert.type === 'oil' && <Droplets size={20} className="stroke-[2.5]" />}
+                     {alert.type === 'route_preventive' && <Wrench size={20} className="stroke-[2.5] text-brand-accent animate-pulse" />}
                    </div>
                    <div>
                      <p className="text-[10px] font-black text-asphalt-700 uppercase tracking-widest leading-none">
@@ -159,15 +197,17 @@ export const FleetAlerts: React.FC<FleetAlertsProps> = ({ vehicles, onVehicleCli
                 <div className="flex flex-col gap-1.5">
                   <p className={cn(
                     "text-[10px] font-black uppercase tracking-tighter flex items-center gap-1.5",
-                    (alert.days !== undefined && alert.days <= 0) || (alert.kmRemaining !== undefined && alert.kmRemaining <= 100) ? "text-rose-500" : alert.priority === 'high' ? "text-rose-400" : "text-brand-accent"
+                    (alert.days !== undefined && alert.days <= 0) || (alert.kmRemaining !== undefined && alert.kmRemaining <= 100) || (alert.type === 'route_preventive' && alert.pct >= 100) ? "text-rose-500" : alert.priority === 'high' ? "text-rose-400" : "text-brand-accent"
                   )}>
-                    {alert.kmRemaining !== undefined 
-                      ? `${alert.kmRemaining.toLocaleString()} KM RESTANTES`
-                      : alert.days < 0 
-                        ? "Prazo Vencido [" + Math.abs(alert.days) + "d]"
-                        : alert.days === 0 
-                          ? "Vencimento Hoje" 
-                          : "Vence em " + alert.days + " dias"}
+                    {alert.type === 'route_preventive'
+                      ? `${alert.pct}% LIMITE ALCANÇADO`
+                      : alert.kmRemaining !== undefined 
+                        ? `${alert.kmRemaining.toLocaleString()} KM RESTANTES`
+                        : alert.days < 0 
+                          ? "Prazo Vencido [" + Math.abs(alert.days) + "d]"
+                          : alert.days === 0 
+                            ? "Vencimento Hoje" 
+                            : "Vence em " + alert.days + " dias"}
                   </p>
                   <div className="h-[2px] w-12 bg-asphalt-800 rounded-full overflow-hidden">
                     <div 
@@ -176,16 +216,20 @@ export const FleetAlerts: React.FC<FleetAlertsProps> = ({ vehicles, onVehicleCli
                         alert.priority === 'high' ? "bg-rose-500" : "bg-brand-accent"
                       )}
                       style={{ 
-                        width: alert.kmRemaining !== undefined 
-                          ? `${Math.max(10, Math.min(100, (1 - alert.kmRemaining / (alert.type === 'oil' ? 1000 : 1500)) * 100))}%`
-                          : `${Math.max(10, Math.min(100, (1 - alert.days / 30) * 100))}%` 
+                        width: alert.type === 'route_preventive'
+                          ? `${alert.pct}%`
+                          : alert.kmRemaining !== undefined 
+                            ? `${Math.max(10, Math.min(100, (1 - alert.kmRemaining / (alert.type === 'oil' ? 1000 : 1500)) * 100))}%`
+                            : `${Math.max(10, Math.min(100, (1 - alert.days / 30) * 100))}%` 
                       }}
                     />
                   </div>
                   <p className="text-[9px] font-bold text-asphalt-700 uppercase tracking-widest mt-1">
-                    {alert.kmRemaining !== undefined 
-                      ? `Estimativa: ${alert.vehicle.currentOdometer + alert.kmRemaining} KM`
-                      : `Vence em: ${format(parseISO(alert.date), 'dd/MM/yyyy')}`}
+                    {alert.type === 'route_preventive'
+                      ? `Faltam: ${alert.kmRemaining <= 0 ? 'CRÍTICO' : `${alert.kmRemaining.toLocaleString()} KM`} (${alert.vehicle.currentOdometer.toLocaleString()} / ${(alert.vehicle.currentOdometer + alert.kmRemaining).toLocaleString()} KM)`
+                      : alert.kmRemaining !== undefined 
+                        ? `Estimativa: ${alert.vehicle.currentOdometer + alert.kmRemaining} KM`
+                        : `Vence em: ${format(parseISO(alert.date), 'dd/MM/yyyy')}`}
                   </p>
                 </div>
               </div>

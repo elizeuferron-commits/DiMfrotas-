@@ -1,5 +1,5 @@
 import React, { useState, useRef } from 'react';
-import { Camera, FileSearch, Loader2, CheckCircle2, AlertCircle, X } from 'lucide-react';
+import { Camera, FileSearch, Loader2, CheckCircle2, AlertCircle, X, FileText } from 'lucide-react';
 import { toast } from 'sonner';
 
 interface ScannedData {
@@ -16,26 +16,63 @@ interface DocumentScannerProps {
 }
 
 /**
- * 🌑 COMPONENTE EM MODO SOMBRA
- * Fornece interface para escanear documentos financeiros usando a API Gemini.
+ * COMPONENTE DE SCANNER DE DOCUMENTOS
+ * Fornece interface para escanear documentos financeiros usando a API Gemini,
+ * com filtro de contraste aplicado automaticamente para imagens.
  */
 export const DocumentScanner: React.FC<DocumentScannerProps> = ({ onScanComplete, onClose }) => {
   const [isScanning, setIsScanning] = useState(false);
   const [preview, setPreview] = useState<string | null>(null);
+  const [selectedMimeType, setSelectedMimeType] = useState<string | null>(null);
+  const [fileName, setFileName] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Função para aplicar filtro de contraste
+  const applyContrast = (imgSrc: string): Promise<string> => {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        canvas.width = img.width;
+        canvas.height = img.height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          resolve(imgSrc);
+          return;
+        }
+
+        // Aplica o filtro de contraste (Ex: 150%)
+        ctx.filter = 'contrast(150%)';
+        ctx.drawImage(img, 0, 0);
+        resolve(canvas.toDataURL('image/jpeg', 0.9));
+      };
+      img.src = imgSrc;
+    });
+  };
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (!file.type.startsWith('image/')) {
-      toast.error('Por favor, selecione um arquivo de imagem (JPG, PNG).');
+    if (!file.type.startsWith('image/') && file.type !== 'application/pdf') {
+      toast.error('Por favor, selecione uma imagem (JPG, PNG) ou um documento PDF.');
       return;
     }
 
+    setFileName(file.name);
+    setSelectedMimeType(file.type);
+
     const reader = new FileReader();
-    reader.onload = (event) => {
-      setPreview(event.target?.result as string);
+    reader.onload = async (event) => {
+      const resultData = event.target?.result as string;
+      if (file.type.startsWith('image/')) {
+        // Aplica o contraste automaticamente apenas para imagens
+        const filteredImage = await applyContrast(resultData);
+        setPreview(filteredImage);
+      } else {
+        // Para PDF, não aplica contraste, apenas guarda o DataURL
+        setPreview(resultData);
+      }
     };
     reader.readAsDataURL(file);
   };
@@ -46,7 +83,7 @@ export const DocumentScanner: React.FC<DocumentScannerProps> = ({ onScanComplete
     setIsScanning(true);
     try {
       const base64Data = preview.split(',')[1];
-      const mimeType = preview.split(',')[0].split(':')[1].split(';')[0];
+      const mimeType = selectedMimeType || preview.split(',')[0].split(':')[1].split(';')[0];
 
       const response = await fetch('/api/finance/scan-document', {
         method: 'POST',
@@ -58,7 +95,10 @@ export const DocumentScanner: React.FC<DocumentScannerProps> = ({ onScanComplete
 
       const data = await response.json();
       
-      toast.success('Documento processado com sucesso!');
+      toast.success(mimeType === 'application/pdf' 
+        ? 'PDF processado e interpretado com sucesso!' 
+        : 'Imagem processada (com realce de contraste) com sucesso!'
+      );
       onScanComplete(data);
     } catch (error) {
       console.error('Scan error:', error);
@@ -66,6 +106,12 @@ export const DocumentScanner: React.FC<DocumentScannerProps> = ({ onScanComplete
     } finally {
       setIsScanning(false);
     }
+  };
+
+  const handleClear = () => {
+    setPreview(null);
+    setSelectedMimeType(null);
+    setFileName(null);
   };
 
   return (
@@ -78,7 +124,7 @@ export const DocumentScanner: React.FC<DocumentScannerProps> = ({ onScanComplete
             </div>
             <div>
               <h3 className="font-bold text-lg text-white">Scanner Inteligente</h3>
-              <p className="text-xs text-zinc-500 uppercase tracking-widest font-medium">Boleto / NF / Recibo</p>
+              <p className="text-xs text-zinc-500 uppercase tracking-widest font-medium">Auto-Contraste & Suporte PDF</p>
             </div>
           </div>
           <button onClick={onClose} className="p-2 hover:bg-zinc-800 rounded-full text-zinc-400 transition-colors">
@@ -96,22 +142,30 @@ export const DocumentScanner: React.FC<DocumentScannerProps> = ({ onScanComplete
                 <FileSearch className="text-zinc-500 group-hover:text-brand-accent" size={32} />
               </div>
               <p className="text-zinc-300 font-medium">Clique para selecionar ou tirar foto</p>
-              <p className="text-zinc-500 text-sm mt-2">Suporta JPG, PNG</p>
+              <p className="text-zinc-500 text-sm mt-2">Suporta JPG, PNG, PDF</p>
               <input 
                 type="file" 
                 ref={fileInputRef} 
                 onChange={handleFileSelect} 
                 className="hidden" 
-                accept="image/*" 
+                accept="image/*,application/pdf" 
                 capture="environment" 
               />
             </div>
           ) : (
             <div className="space-y-6">
               <div className="relative rounded-2xl overflow-hidden border border-zinc-800 h-64 bg-black">
-                <img src={preview} alt="Preview" className="w-full h-full object-contain" />
+                {selectedMimeType === 'application/pdf' ? (
+                  <div className="w-full h-full flex flex-col items-center justify-center gap-3 p-4 bg-zinc-950">
+                    <FileText className="text-red-500 animate-pulse animate-duration-1000" size={56} />
+                    <p className="text-zinc-200 font-bold text-sm truncate max-w-xs">{fileName || 'Documento.pdf'}</p>
+                    <span className="text-[10px] font-black text-red-500/80 uppercase tracking-widest bg-red-500/10 px-2.5 py-1 rounded-md font-mono">Documento PDF</span>
+                  </div>
+                ) : (
+                  <img src={preview} alt="Preview Contrastado" className="w-full h-full object-contain" />
+                )}
                 <button 
-                  onClick={() => setPreview(null)}
+                  onClick={handleClear}
                   className="absolute top-2 right-2 p-2 bg-zinc-900/80 hover:bg-red-500 text-white rounded-full transition-all"
                 >
                   <X size={16} />
@@ -120,11 +174,11 @@ export const DocumentScanner: React.FC<DocumentScannerProps> = ({ onScanComplete
 
               <div className="flex gap-4">
                 <button
-                  onClick={() => setPreview(null)}
+                  onClick={handleClear}
                   disabled={isScanning}
                   className="flex-1 py-4 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-2xl font-bold transition-all disabled:opacity-50 uppercase text-xs tracking-widest"
                 >
-                  Trocar Foto
+                  Trocar Arquivo
                 </button>
                 <button
                   onClick={processImage}
@@ -149,9 +203,8 @@ export const DocumentScanner: React.FC<DocumentScannerProps> = ({ onScanComplete
 
           <div className="mt-8 flex items-start gap-3 p-4 bg-blue-500/5 border border-blue-500/10 rounded-2xl">
             <AlertCircle className="text-blue-400 shrink-0" size={18} />
-            <p className="text-xs text-blue-300/70 leading-relaxed">
-              A IA identificará automaticamente o fornecedor, valor, vencimento e código de barras. 
-              Sempre confira os dados antes de salvar.
+            <p className="text-xs text-blue-300/70 leading-relaxed font-sans">
+              Suporta imagens e documentos em formato PDF. Filtro de contraste automático aplicado apenas em imagens para melhorar a legibilidade. Sempre confira os dados antes de salvar.
             </p>
           </div>
         </div>

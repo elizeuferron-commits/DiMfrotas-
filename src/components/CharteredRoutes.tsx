@@ -1,91 +1,333 @@
-import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { 
-  Route, 
-  Users, 
-  Calendar, 
-  Clock, 
-  Search, 
-  MapPin, 
-  Plus, 
-  Building2,
-  Trash2,
-  Edit,
-  CheckCircle2,
-  AlertCircle,
-  Smartphone
+  Route, Users, Calendar, Clock, Search, MapPin, 
+  Plus, Building2, Trash2, Edit, CheckCircle2, 
+  X, AlertCircle, Smartphone, CheckSquare, FileText, 
+  DollarSign, ChevronLeft, ChevronRight, Receipt, Send, 
+  Printer, ArrowRight, ArrowLeft, SkipForward, Play, Square, RefreshCw, Compass, Sparkles, Zap
 } from 'lucide-react';
 import { Button, Input, Select, ConfirmModal } from './UI';
 import { cn } from '../lib/utils';
 import { format } from 'date-fns';
 import { toast } from 'sonner';
-import { collection, addDoc, updateDoc, deleteDoc, doc, serverTimestamp } from 'firebase/firestore';
+import { collection, addDoc, updateDoc, deleteDoc, doc, serverTimestamp, query, orderBy, onSnapshot } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
+import { motion, AnimatePresence } from 'framer-motion';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 
-interface Passenger {
-  name: string;
-  phone?: string;
-  locationUrl?: string;
-  boardingTime?: string;
-}
+// Types & Helpers from charter subsystem
+import { Passenger, CustomTrip, CharteredRoute, Client, ClientTrip } from './charter/CharterTypes';
+import { 
+  parseSafeDate, safeFormatDate, getMapsDirUrl, 
+  getMapsEmbedUrl, exportRouteToGpx, exportRouteToPdf, 
+  exportRouteToOfflineHtml, exportClosingPdf, exportClientDossierPdf,
+  exportClientPeriodDossierPdf
+} from './charter/CharterUtils';
 
-const getMapsDirUrl = (locationUrl?: string, fallbackQuery?: string): string => {
-  if (!locationUrl || locationUrl.trim() === '') {
-    return `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(fallbackQuery || '')}`;
-  }
+// Modular Components
+import { GpsAssistant } from './charter/GpsAssistant';
+import { ClientClosingModal } from './charter/ClientClosingModal';
+import { AddRouteModal, EditRouteModal } from './charter/RouteForms';
+import { charterIndexedDBService } from '../services/charterIndexedDBService';
+import { CharterOfflineManager } from './charter/CharterOfflineManager';
 
-  const urlStr = locationUrl.trim();
+export const CharteredRoutes: React.FC<{
+  vehicles: any[];
+  employees: any[];
+  routes: CharteredRoute[];
+  currentUserRole?: string;
+  currentUserEmail?: string;
+}> = ({ 
+  vehicles, 
+  employees, 
+  routes, 
+  currentUserRole,
+  currentUserEmail
+}) => {
+  const [activeTab, setActiveTab] = useState<'routes' | 'client_charters'>('client_charters');
+  
+  // Security Role Checks
+  const hasClientCharterAccess = useMemo(() => {
+    const role = currentUserRole;
+    return role === 'Dono / Proprietário' || 
+           role === 'Dono' || 
+           role === 'Proprietário' || 
+           role === 'Gestor de Frotas' || 
+           role === 'Coordenador Logístico' || 
+           role === 'Administrativo' ||
+           role === 'admin';
+  }, [currentUserRole]);
 
-  // Try to find coordinates (-xx.xxxx, -yy.yyyy or xx.xxxx, yy.yyyy)
-  // Matching format like @-23.12345,-46.12345 or q=-23.12345,-46.12345 or just -23.12345,-46.12345
-  const coordRegex = /(-?\d+\.\d+)\s*,\s*(-?\d+\.\d+)/;
-  const match = urlStr.match(coordRegex);
-  if (match) {
-    const lat = parseFloat(match[1]);
-    const lng = parseFloat(match[2]);
-    if (lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
-      return `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}`;
-    }
-  }
+  const isOwner = currentUserRole === 'Dono / Proprietário' || currentUserRole === 'Dono' || currentUserRole === 'Proprietário';
+  const canEditValues = useMemo(() => {
+    return currentUserRole === 'Dono / Proprietário' || 
+           currentUserRole === 'Dono' || 
+           currentUserRole === 'Proprietário' || 
+           currentUserRole === 'Administrativo' || 
+           currentUserRole === 'admin' ||
+           currentUserEmail === 'elizeuferron@gmail.com';
+  }, [currentUserRole, currentUserEmail]);
 
-  // If it's pure address text (does not start with http/https), turn it into directions route
-  if (!urlStr.startsWith('http://') && !urlStr.startsWith('https://')) {
-    return `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(urlStr)}`;
-  }
-
-  // If it is a full web URL but doesn't have coordinates, we can try to wrap it if it represents an address
-  // Otherwise, return it as can be (short url, maps.app.goo.gl link etc).
-  return urlStr;
-};
-
-interface CharteredRoute {
-  id: string;
-  name: string;
-  client: string;
-  type: 'factory' | 'school' | 'other';
-  daysOfWeek: number[]; // 0-6
-  schedules: { departureTime: string; returnTime: string }[];
-  fixedVehicleId?: string;
-  fixedDriverId?: string;
-  passengerCount: number;
-  status: 'active' | 'inactive';
-  locationUrl?: string;
-  passengerName?: string;
-  passengerPhone?: string;
-  runState?: 'idle' | 'running';
-  runStartedAt?: string | null;
-  passengers?: Passenger[];
-}
-
-export const CharteredRoutes = ({ vehicles, employees, routes }: { vehicles: any[], employees: any[], routes: CharteredRoute[] }) => {
-  const navigate = useNavigate();
+  // Main UI Modals State
   const [showAddForm, setShowAddForm] = useState(false);
   const [showEditForm, setShowEditForm] = useState(false);
-  const [editingRoute, setEditingRoute] = useState<any>(null);
+  const [editingRoute, setEditingRoute] = useState<CharteredRoute | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
-  const [viewingPassengersRoute, setViewingPassengersRoute] = useState<CharteredRoute | null>(null);
-  const [isFloatingNavDismissed, setIsFloatingNavDismissed] = useState(false);
 
+  // Quick Quick-Add Form State
+  const [quickRoute, setQuickRoute] = useState({
+    name: '',
+    client: '',
+    type: 'factory' as 'factory' | 'school' | 'other' | 'regular_random',
+    daysOfWeek: [1, 2, 3, 4, 5],
+    departureTime: '08:00',
+    returnTime: '17:00',
+    fixedVehicleId: '',
+    fixedDriverId: '',
+  });
+
+  // GPS navigation & Progressive Tracking States
+  const [activeGpsRoute, setActiveGpsRoute] = useState<CharteredRoute | null>(null);
+  const [activeGpsPassengerIndex, setActiveGpsPassengerIndex] = useState<number>(0);
+  const [isGpsPanelOpen, setIsGpsPanelOpen] = useState<boolean>(false);
+  const [isGpsMiniMenuOpen, setIsGpsMiniMenuOpen] = useState<boolean>(true);
+  const [isFloatingNavDismissed, setIsFloatingNavDismissed] = useState(false);
+  const [isGpsBubbleOnlyMode, setIsGpsBubbleOnlyMode] = useState<boolean>(false);
+  const [isBubbleMinimized, setIsBubbleMinimized] = useState<boolean>(false);
+  const [userCoords, setUserCoords] = useState<{ lat: number; lng: number } | null>(null);
+
+  // Read driver position
+  useEffect(() => {
+    let watchId: number | null = null;
+    if (typeof window !== 'undefined' && navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          setUserCoords({
+            lat: position.coords.latitude,
+            lng: position.coords.longitude
+          });
+        },
+        (error) => {
+          console.warn("Navegação DM: Erro de GPS inicial:", error);
+        },
+        { enableHighAccuracy: true, timeout: 5000 }
+      );
+
+      watchId = navigator.geolocation.watchPosition(
+        (position) => {
+          setUserCoords({
+            lat: position.coords.latitude,
+            lng: position.coords.longitude
+          });
+        },
+        (error) => {
+          console.warn("Navegação DM: Erro de GPS contínuo:", error);
+        },
+        { enableHighAccuracy: true }
+      );
+    }
+
+    return () => {
+      if (watchId !== null && typeof window !== 'undefined' && navigator.geolocation) {
+        navigator.geolocation.clearWatch(watchId);
+      }
+    };
+  }, []);
+
+  // Client Charters collections state
+  const [clientCharters, setClientCharters] = useState<ClientTrip[]>([]);
+  const [clients, setClients] = useState<Client[]>([]);
+  const [showClientAddForm, setShowClientAddForm] = useState(false);
+  const [showClientEditForm, setShowClientEditForm] = useState(false);
+  const [isQuickMode, setIsQuickMode] = useState(false);
+  const [editingClientCharter, setEditingClientCharter] = useState<ClientTrip | null>(null);
+  
+  // Client Management modals
+  const [showRegisterClientForm, setShowRegisterClientForm] = useState(false);
+  const [showEditClientForm, setShowEditClientForm] = useState(false);
+  const [editingClient, setEditingClient] = useState<Client | null>(null);
+  const [selectedClientDetail, setSelectedClientDetail] = useState<Client | null>(null);
+  const [clientSubTab, setClientSubTab] = useState<'trips' | 'clients'>('trips');
+  const [clientDetailTab, setClientDetailTab] = useState<'billing_frequency' | 'routes' | 'fixed_routes_contract'>('billing_frequency');
+  const [currentCalendarDate, setCurrentCalendarDate] = useState(new Date());
+  
+  const [periodStartDate, setPeriodStartDate] = useState('');
+  const [periodEndDate, setPeriodEndDate] = useState('');
+
+  // Auto-initialize period query ranges to the current month's limits
+  useEffect(() => {
+    const now = new Date();
+    const firstDay = new Date(now.getFullYear(), now.getMonth(), 1);
+    const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+    
+    const formatDateInput = (date: Date) => {
+      const y = date.getFullYear();
+      const m = String(date.getMonth() + 1).padStart(2, '0');
+      const d = String(date.getDate()).padStart(2, '0');
+      return `${y}-${m}-${d}`;
+    };
+    
+    setPeriodStartDate(formatDateInput(firstDay));
+    setPeriodEndDate(formatDateInput(lastDay));
+  }, []);
+  
+  // State for adding a new Fixed Route to a Client's contract
+  const [newFixedRouteName, setNewFixedRouteName] = useState('');
+  const [newFixedRouteSchedule, setNewFixedRouteSchedule] = useState('');
+  const [newFixedRouteDriverId, setNewFixedRouteDriverId] = useState('');
+  const [newFixedRouteVehicleId, setNewFixedRouteVehicleId] = useState('');
+  const [newFixedRouteDays, setNewFixedRouteDays] = useState<number[]>([]);
+
+  const location = useLocation();
+  const navigate = useNavigate();
+
+  // Handle route deep-linking to Client Details tab page
+  useEffect(() => {
+    if (location.state && (location.state as any).selectClientId && clients.length > 0) {
+      const targetClientId = (location.state as any).selectClientId;
+      const foundClient = clients.find(c => c.id === targetClientId);
+      if (foundClient) {
+        setActiveTab('client_charters');
+        setClientSubTab('clients');
+        setSelectedClientDetail(foundClient);
+        toast.info(`Ficha do cliente ${foundClient.name.toUpperCase()} aberta.`);
+      }
+      navigate(location.pathname, { replace: true, state: {} });
+    }
+  }, [location.state, clients, navigate, location.pathname]);
+
+  const currentClient = useMemo(() => {
+    if (!selectedClientDetail) return null;
+    return clients.find(c => c.id === selectedClientDetail.id) || selectedClientDetail;
+  }, [clients, selectedClientDetail]);
+
+  useEffect(() => {
+    if (selectedClientDetail) {
+      setCurrentCalendarDate(new Date());
+    }
+  }, [selectedClientDetail]);
+
+  const calendarGridDays = useMemo(() => {
+    const year = currentCalendarDate.getFullYear();
+    const month = currentCalendarDate.getMonth();
+    const firstDayOfMonth = new Date(year, month, 1).getDay();
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+
+    const days: (Date | null)[] = [];
+    for (let i = 0; i < firstDayOfMonth; i++) {
+      days.push(null);
+    }
+    for (let d = 1; d <= daysInMonth; d++) {
+      days.push(new Date(year, month, d));
+    }
+    return days;
+  }, [currentCalendarDate]);
+
+  // Dossier monthly closing states
+  const [isClosingModalOpen, setIsClosingModalOpen] = useState(false);
+  const [closingMonthYear, setClosingMonthYear] = useState(() => format(new Date(), 'yyyy-MM'));
+  const [selectedClosingTrips, setSelectedClosingTrips] = useState<Record<string, boolean>>({});
+  const [closingPreviewData, setClosingPreviewData] = useState<{
+    pdfUrl: string;
+    trips: any[];
+    client: any;
+    fileName: string;
+  } | null>(null);
+
+  // New Client Trip state
+  const [newClientCharter, setNewClientCharter] = useState({
+    client: '',
+    clientId: '',
+    description: '',
+    dateTime: '',
+    origin: '',
+    destination: '',
+    value: 0,
+    driverId: '',
+    vehicleId: '',
+    status: 'pending' as 'pending' | 'completed' | 'cancelled',
+    paymentStatus: 'open' as 'open' | 'billed' | 'received',
+    passengerCount: 0,
+    isExtra: false,
+    hasExtraService: false,
+    extraServiceDesc: '',
+    extraServiceVal: 0
+  });
+
+  // Client list search, pagination and date range states
+  const [clientStartDate, setClientStartDate] = useState<string>(() => {
+    const d = new Date();
+    return format(new Date(d.getFullYear(), d.getMonth(), 1), 'yyyy-MM-dd');
+  });
+  const [clientEndDate, setClientEndDate] = useState<string>(() => {
+    return format(new Date(), 'yyyy-MM-dd');
+  });
+
+  const [newClient, setNewClient] = useState({
+    name: '',
+    companyName: '',
+    document: '',
+    phone: '',
+    email: '',
+    address: '',
+    notes: '',
+    defaultTripValue: 0,
+    extraTripsNotes: '',
+    extraWorksNotes: ''
+  });
+
+  // Batch trip launching selection
+  const [selectedLaunchDays, setSelectedLaunchDays] = useState<string[]>([]);
+  const [launchCalendarDate, setLaunchCalendarDate] = useState(new Date());
+  const [launchTime, setLaunchTime] = useState('08:00');
+
+  const launchCalendarGridDays = useMemo(() => {
+    const year = launchCalendarDate.getFullYear();
+    const month = launchCalendarDate.getMonth();
+    const firstDayOfMonth = new Date(year, month, 1).getDay();
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+
+    const days: (Date | null)[] = [];
+    for (let i = 0; i < firstDayOfMonth; i++) {
+      days.push(null);
+    }
+    for (let d = 1; d <= daysInMonth; d++) {
+      days.push(new Date(year, month, d));
+    }
+    return days;
+  }, [launchCalendarDate]);
+
+  // Firestore DB snapshot listeners
+  useEffect(() => {
+    const q = query(collection(db, 'charter_client_trips'), orderBy('dateTime', 'desc'));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const list = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      })) as ClientTrip[];
+      setClientCharters(list);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'charter_client_trips');
+    });
+    return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    const q = query(collection(db, 'charter_clients'), orderBy('name', 'asc'));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const list = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      })) as Client[];
+      setClients(list);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'charter_clients');
+    });
+    return () => unsubscribe();
+  }, []);
+
+  // Sync route passenger navigation indices with storage
   const [navIndexes, setNavIndexes] = useState<Record<string, number>>(() => {
     const initial: Record<string, number> = {};
     try {
@@ -103,30 +345,950 @@ export const CharteredRoutes = ({ vehicles, employees, routes }: { vehicles: any
     return initial;
   });
 
-  const [newRoute, setNewRoute] = useState({
-    name: '',
-    client: '',
-    type: 'factory' as const,
-    daysOfWeek: [1, 2, 3, 4, 5],
-    schedules: [{ departureTime: '', returnTime: '' }],
-    locationUrl: '',
-    passengerCount: 0,
-    fixedVehicleId: '',
-    fixedDriverId: '',
-    passengerName: '',
-    passengerPhone: '',
-    runState: 'idle' as const,
-    passengers: [] as Passenger[]
-  });
+  // Main list filters and stats memoizations
+  const clientTripsForSelectedClient = useMemo(() => {
+    if (!selectedClientDetail) return [];
+    const nameLower = selectedClientDetail.name?.toLowerCase();
+    const clientId = selectedClientDetail.id;
+    return clientCharters.filter(t => 
+      t.clientId === clientId || t.client?.toLowerCase() === nameLower
+    );
+  }, [selectedClientDetail, clientCharters]);
 
-  const [deleteConfirm, setDeleteConfirm] = useState<{ isOpen: boolean; onConfirm: () => void; title: string; message: string }>({
+  const periodTrips = useMemo(() => {
+    if (!selectedClientDetail || !periodStartDate || !periodEndDate) return [];
+    
+    const start = new Date(periodStartDate + 'T00:00:00');
+    const end = new Date(periodEndDate + 'T23:59:59');
+    
+    return clientTripsForSelectedClient.filter(trip => {
+      const tripDate = new Date(trip.dateTime);
+      return tripDate >= start && tripDate <= end;
+    });
+  }, [selectedClientDetail, clientTripsForSelectedClient, periodStartDate, periodEndDate]);
+
+  const periodTripsStats = useMemo(() => {
+    let totalValue = 0;
+    periodTrips.forEach(trip => {
+      const baseVal = trip.isExtra ? (trip.value || 0) : (selectedClientDetail?.defaultTripValue || trip.value || 0);
+      const extraVal = (trip.hasExtraService && trip.extraServiceVal) ? trip.extraServiceVal : 0;
+      totalValue += (baseVal + extraVal);
+    });
+    return {
+      count: periodTrips.length,
+      totalValue
+    };
+  }, [periodTrips, selectedClientDetail]);
+
+  const currentClientOpenTrips = useMemo(() => {
+    return clientTripsForSelectedClient.filter(t => 
+      t.status !== 'cancelled' && t.paymentStatus !== 'received'
+    );
+  }, [clientTripsForSelectedClient]);
+
+  const filteredClosingTrips = useMemo(() => {
+    return currentClientOpenTrips.filter(t => t.dateTime?.startsWith(closingMonthYear));
+  }, [currentClientOpenTrips, closingMonthYear]);
+
+  const filteredPeriodCharters = useMemo(() => {
+    return clientCharters.filter(c => {
+      const d = c.dateTime ? c.dateTime.split('T')[0] : '';
+      return (!clientStartDate || d >= clientStartDate) && (!clientEndDate || d <= clientEndDate);
+    });
+  }, [clientCharters, clientStartDate, clientEndDate]);
+
+  const periodStats = useMemo(() => {
+    let estimatedRevenue = 0;
+    let totalReceived = 0;
+    let openBalance = 0;
+    let activeRoutesCount = 0;
+
+    filteredPeriodCharters.forEach(c => {
+      if (c.status !== 'cancelled') {
+        const val = c.value || 0;
+        estimatedRevenue += val;
+        activeRoutesCount++;
+        if (c.paymentStatus === 'received') {
+          totalReceived += val;
+        } else {
+          openBalance += val;
+        }
+      }
+    });
+
+    return {
+      totalCount: filteredPeriodCharters.length,
+      activeRoutesCount,
+      estimatedRevenue,
+      totalReceived,
+      openBalance
+    };
+  }, [filteredPeriodCharters]);
+
+  const listedPeriodCharters = useMemo(() => {
+    const activeTrips = filteredPeriodCharters.filter(t => t.paymentStatus !== 'received');
+    const q = searchQuery.toLowerCase().trim();
+    if (!q) return activeTrips;
+    return activeTrips.filter(c => 
+      c.client?.toLowerCase().includes(q) ||
+      c.origin?.toLowerCase().includes(q) ||
+      c.destination?.toLowerCase().includes(q) ||
+      c.description?.toLowerCase().includes(q)
+    );
+  }, [filteredPeriodCharters, searchQuery]);
+
+  const filteredClients = useMemo(() => {
+    const q = searchQuery.toLowerCase().trim();
+    if (!q) return clients;
+    return clients.filter(client => 
+      client.name?.toLowerCase().includes(q) ||
+      client.companyName?.toLowerCase().includes(q) ||
+      client.document?.toLowerCase().includes(q)
+    );
+  }, [clients, searchQuery]);
+
+  const tripCountsByClient = useMemo(() => {
+    const counts: Record<string, number> = {};
+    clients.forEach(c => { counts[c.id] = 0; });
+    clientCharters.forEach(t => {
+      if (t.clientId && counts[t.clientId] !== undefined) {
+        counts[t.clientId]++;
+      } else if (t.client) {
+        const lowerName = t.client.toLowerCase();
+        const found = clients.find(c => c.name?.toLowerCase() === lowerName);
+        if (found) counts[found.id] = (counts[found.id] || 0) + 1;
+      }
+    });
+    return counts;
+  }, [clients, clientCharters]);
+
+  const routeExecutionData = useMemo(() => {
+    if (!selectedClientDetail || !selectedClientDetail.fixedRoutes || selectedClientDetail.fixedRoutes.length === 0) {
+      return [];
+    }
+    const targetYearMonth = format(currentCalendarDate, 'yyyy-MM');
+    const tripsInMonth = clientTripsForSelectedClient.filter(t => 
+      t.dateTime && t.dateTime.startsWith(targetYearMonth)
+    );
+    return selectedClientDetail.fixedRoutes.map(route => {
+      const defaultDriver = employees.find(e => e.id === route.driverId);
+      const defaultDriverName = defaultDriver ? defaultDriver.name.toUpperCase().split(' ')[0] : 'NÃO DEFINIDO';
+      const matchingTrips = tripsInMonth.filter(t => 
+        t.description?.toUpperCase() === route.name?.toUpperCase()
+      );
+      const actualDriverCounts: Record<string, number> = {};
+      matchingTrips.forEach(t => {
+        const drv = employees.find(e => e.id === t.driverId);
+        const drvName = drv ? drv.name.toUpperCase() : 'NÃO DEFINIDO';
+        actualDriverCounts[drvName] = (actualDriverCounts[drvName] || 0) + 1;
+      });
+      const driverBreakdown = Object.entries(actualDriverCounts)
+        .map(([name, count]) => `${name} (${count}x)`)
+        .join(', ');
+      return {
+        name: route.name.toUpperCase(),
+        frequency: matchingTrips.length,
+        defaultDriver: defaultDriverName,
+        driverBreakdown: driverBreakdown || 'Nenhuma viagem realizada',
+      };
+    });
+  }, [selectedClientDetail, clientTripsForSelectedClient, currentCalendarDate, employees]);
+
+  // Handle active running route toggles
+  const handleToggleRunRoute = async (route: CharteredRoute) => {
+    const isStarting = route.runState !== 'running';
+    try {
+      await updateDoc(doc(db, 'chartered_routes', route.id), {
+        runState: isStarting ? 'running' : 'idle',
+        runStartedAt: isStarting ? new Date().toISOString() : null
+      });
+      
+      if (isStarting) {
+        setIsFloatingNavDismissed(false);
+        toast.info(`Fretamento ${route.name.toUpperCase()} iniciado!`);
+        
+        setNavIndexes(prev => {
+          const updated = { ...prev, [route.id]: 0 };
+          localStorage.setItem('active_route_nav_' + route.id, '0');
+          return updated;
+        });
+
+        setActiveGpsRoute(route);
+        setActiveGpsPassengerIndex(0);
+        setIsGpsPanelOpen(true);
+        setIsGpsBubbleOnlyMode(true);
+        setIsBubbleMinimized(false);
+
+        // Auto opening route navigation GPS map external link
+        const navPassengers = (route.passengers || []).slice(0, 20);
+        const first = navPassengers[0];
+        const destUrl = getMapsDirUrl(
+          first ? first.locationUrl : route.locationUrl,
+          first ? `${first.name} ${route.client}` : `${route.name} ${route.client}`,
+          userCoords
+        );
+        window.open(destUrl, '_blank');
+      } else {
+        toast.success(`Fretamento ${route.name.toUpperCase()} concluído.`);
+      }
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, 'chartered_routes');
+    }
+  };
+
+  const handleNextPassenger = (shouldOpenExternal: boolean = true) => {
+    if (!activeGpsRoute) return;
+    const maxIdx = Math.min(Math.max((activeGpsRoute.passengers || []).length, 0), 20);
+    
+    if (activeGpsPassengerIndex + 1 < maxIdx) {
+      const nextIdx = activeGpsPassengerIndex + 1;
+      setActiveGpsPassengerIndex(nextIdx);
+      
+      setNavIndexes(prev => {
+        const updated = { ...prev, [activeGpsRoute.id]: nextIdx };
+        localStorage.setItem('active_route_nav_' + activeGpsRoute.id, String(nextIdx));
+        return updated;
+      });
+
+      if (shouldOpenExternal) {
+        const nextPassenger = (activeGpsRoute.passengers || [])[nextIdx];
+        if (nextPassenger) {
+          const nextUrl = getMapsDirUrl(
+            nextPassenger.locationUrl,
+            `${nextPassenger.name} ${activeGpsRoute.client}`,
+            userCoords
+          );
+          window.open(nextUrl, '_blank');
+        }
+      }
+    } else {
+      toast.success("🏁 Itinerário de passageiros concluído!");
+      setActiveGpsRoute(null);
+      setIsGpsPanelOpen(false);
+    }
+  };
+
+  const handlePrevPassenger = () => {
+    if (!activeGpsRoute || activeGpsPassengerIndex <= 0) return;
+    const prevIdx = activeGpsPassengerIndex - 1;
+    setActiveGpsPassengerIndex(prevIdx);
+    setNavIndexes(prev => {
+      const updated = { ...prev, [activeGpsRoute.id]: prevIdx };
+      localStorage.setItem('active_route_nav_' + activeGpsRoute.id, String(prevIdx));
+      return updated;
+    });
+  };
+
+  const handleSelectPassengerIndex = (idx: number) => {
+    if (!activeGpsRoute) return;
+    setActiveGpsPassengerIndex(idx);
+    setNavIndexes(prev => {
+      const updated = { ...prev, [activeGpsRoute.id]: idx };
+      localStorage.setItem('active_route_nav_' + activeGpsRoute.id, String(idx));
+      return updated;
+    });
+  };
+
+  // Toggle checklist of completed dates for continuous routines
+  const handleToggleRouteDateCompleted = async (routeId: string, dateStr: string) => {
+    try {
+      const route = routes.find(r => r.id === routeId);
+      if (!route) return;
+      
+      const completedDates = route.completedDates || [];
+      const updated = completedDates.includes(dateStr)
+        ? completedDates.filter(d => d !== dateStr)
+        : [...completedDates, dateStr];
+
+      await updateDoc(doc(db, 'chartered_routes', routeId), {
+        completedDates: updated
+      });
+      toast.success(completedDates.includes(dateStr) ? "Presença desmarcada!" : "Viagem agendada da data registrada como REALIZADA!");
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, 'chartered_routes');
+    }
+  };
+
+  // Create & Edit DB operations wrappers for split forms
+  const handleCreateRouteSubmit = async (routeData: any) => {
+    try {
+      if (!navigator.onLine) {
+        await charterIndexedDBService.saveOfflineRoute({
+          ...routeData,
+          status: 'active',
+          runState: 'idle' as 'running' | 'idle'
+        } as any);
+        setShowAddForm(false);
+        toast.warning("Sem conexão de rede. Fretamento agendado localmente (IndexedDB) e será sincronizado quando o sinal de internet retornar!", {
+          duration: 6000
+        });
+        return;
+      }
+      await addDoc(collection(db, 'chartered_routes'), {
+        ...routeData,
+        createdAt: serverTimestamp(),
+        status: 'active',
+        runState: 'idle'
+      });
+      setShowAddForm(false);
+      toast.success("Rota cadastrada com sucesso!");
+    } catch (e: any) {
+      if (!navigator.onLine || e.message?.toLowerCase().includes('offline') || e.message?.toLowerCase().includes('network')) {
+        try {
+          await charterIndexedDBService.saveOfflineRoute({
+            ...routeData,
+            status: 'active',
+            runState: 'idle' as 'running' | 'idle'
+          } as any);
+          setShowAddForm(false);
+          toast.warning("Falha temporária de escrita. Fretamento agendado localmente (IndexedDB) e será sincronizado em breve!", {
+            duration: 6000
+          });
+          return;
+        } catch (localErr) {
+          console.error("Erro no IndexedDB fallback:", localErr);
+        }
+      }
+      handleFirestoreError(e, OperationType.WRITE, 'chartered_routes');
+    }
+  };
+
+  const handleUpdateRouteSubmit = async (routeData: any) => {
+    try {
+      const { id, ...saveData } = routeData;
+      await updateDoc(doc(db, 'chartered_routes', id), {
+        ...saveData,
+        updatedAt: serverTimestamp()
+      });
+      setShowEditForm(false);
+      setEditingRoute(null);
+      toast.success("Fretamento atualizado!");
+    } catch (e) {
+      handleFirestoreError(e, OperationType.WRITE, 'chartered_routes');
+    }
+  };
+
+  const handleLaunchQuickRouteSubmit = async () => {
+    if (!quickRoute.name || !quickRoute.client) {
+      toast.error('Preencha os campos obrigatórios (Nome e Cliente).');
+      return;
+    }
+    const routeData: Omit<CharteredRoute, 'id'> = {
+      name: quickRoute.name,
+      client: quickRoute.client,
+      type: quickRoute.type as any,
+      daysOfWeek: quickRoute.daysOfWeek,
+      schedules: [{ departureTime: quickRoute.departureTime, returnTime: quickRoute.returnTime }],
+      fixedVehicleId: quickRoute.fixedVehicleId,
+      fixedDriverId: quickRoute.fixedDriverId,
+      passengerCount: 0,
+      status: 'active',
+      runState: 'idle',
+      passengers: []
+    };
+
+    try {
+      if (!navigator.onLine) {
+        await charterIndexedDBService.saveOfflineRoute(routeData);
+        setQuickRoute({
+          name: '',
+          client: '',
+          type: 'factory',
+          daysOfWeek: [1, 2, 3, 4, 5],
+          departureTime: '08:00',
+          returnTime: '17:00',
+          fixedVehicleId: '',
+          fixedDriverId: ''
+        });
+        toast.warning("Sem conexão. Rota rápida agendada localmente (IndexedDB) e será sincronizada quando o sinal retornar!", {
+          duration: 6000
+        });
+        return;
+      }
+      await addDoc(collection(db, 'chartered_routes'), {
+        ...routeData,
+        createdAt: serverTimestamp()
+      });
+      setQuickRoute({
+        name: '',
+        client: '',
+        type: 'factory',
+        daysOfWeek: [1, 2, 3, 4, 5],
+        departureTime: '08:00',
+        returnTime: '17:00',
+        fixedVehicleId: '',
+        fixedDriverId: ''
+      });
+      toast.success("Rota rápida vinculada!");
+    } catch (e: any) {
+      if (!navigator.onLine || e.message?.toLowerCase().includes('offline') || e.message?.toLowerCase().includes('network')) {
+        try {
+          await charterIndexedDBService.saveOfflineRoute(routeData);
+          setQuickRoute({
+            name: '',
+            client: '',
+            type: 'factory',
+            daysOfWeek: [1, 2, 3, 4, 5],
+            departureTime: '08:00',
+            returnTime: '17:00',
+            fixedVehicleId: '',
+            fixedDriverId: ''
+          });
+          toast.warning("Escrita local realizada por perda de conexão com o servidor. A rota será sincronizada automaticamente!", {
+            duration: 6000
+          });
+          return;
+        } catch (localErr) {
+          console.error("Erro no IndexedDB fallback rápido:", localErr);
+        }
+      }
+      handleFirestoreError(e, OperationType.WRITE, 'chartered_routes');
+    }
+  };
+
+  // Client database write operations
+  const handleAddClientSubmit = async () => {
+    if (!newClient.name) {
+      toast.error("Insira o nome fantasia do cliente.");
+      return;
+    }
+    try {
+      await addDoc(collection(db, 'charter_clients'), {
+        ...newClient,
+        createdAt: serverTimestamp()
+      });
+      setShowRegisterClientForm(false);
+      setNewClient({
+        name: '',
+        companyName: '',
+        document: '',
+        phone: '',
+        email: '',
+        address: '',
+        notes: '',
+        defaultTripValue: 0,
+        extraTripsNotes: '',
+        extraWorksNotes: ''
+      });
+      toast.success("Cliente cadastrado no banco de dados!");
+    } catch (e) {
+      handleFirestoreError(e, OperationType.WRITE, 'charter_clients');
+    }
+  };
+
+  const handleUpdateClientSubmit = async () => {
+    if (!editingClient || !editingClient.name) return;
+    try {
+      await updateDoc(doc(db, 'charter_clients', editingClient.id), {
+        name: editingClient.name,
+        companyName: editingClient.companyName || '',
+        document: editingClient.document || '',
+        phone: editingClient.phone || '',
+        email: editingClient.email || '',
+        address: editingClient.address || '',
+        notes: editingClient.notes || '',
+        defaultTripValue: editingClient.defaultTripValue || 0,
+        extraTripsNotes: editingClient.extraTripsNotes || '',
+        extraWorksNotes: editingClient.extraWorksNotes || '',
+        updatedAt: serverTimestamp()
+      });
+      setShowEditClientForm(false);
+      setEditingClient(null);
+      toast.success("Ficha do cliente de cobrança atualizada!");
+    } catch (e) {
+      handleFirestoreError(e, OperationType.WRITE, 'charter_clients');
+    }
+  };
+
+  const handleDeleteClient = async (id: string, name: string) => {
+    if (!confirm(`Excluir permanentemente o cadastro de ${name.toUpperCase()}?`)) return;
+    try {
+      await deleteDoc(doc(db, 'charter_clients', id));
+      toast.success("Cliente excluído.");
+      setSelectedClientDetail(null);
+    } catch (e) {
+      handleFirestoreError(e, OperationType.WRITE, 'charter_clients');
+    }
+  };
+
+  // Toggle calendar worked day for client monthly invoicing calculation
+  const handleToggleClientWorkedDay = async (clientId: string, dateStr: string) => {
+    const clientItem = clients.find(c => c.id === clientId);
+    if (!clientItem) return;
+    
+    try {
+      const workedDays = clientItem.workedDays || [];
+      const isAdding = !workedDays.includes(dateStr);
+      const updated = isAdding
+        ? [...workedDays, dateStr]
+        : workedDays.filter(d => d !== dateStr);
+
+      await updateDoc(doc(db, 'charter_clients', clientId), {
+        workedDays: updated
+      });
+
+      // Update selected detail in-state immediately so the view stays perfectly in sync
+      setSelectedClientDetail(prev => prev ? { ...prev, workedDays: updated } : null);
+
+      if (isAdding) {
+        // Automatic pre-filling based on configured Fixed Routes
+        const fixedRoutes = clientItem.fixedRoutes || [];
+        if (fixedRoutes.length > 0) {
+          const dateParts = dateStr.split('-');
+          const year = parseInt(dateParts[0], 10);
+          const month = parseInt(dateParts[1], 10) - 1;
+          const day = parseInt(dateParts[2], 10);
+          const parsedDate = new Date(year, month, day);
+          const dayOfWeekValue = parsedDate.getDay();
+
+          let createdCount = 0;
+          for (const route of fixedRoutes) {
+            const matchesDay = route.daysOfWeek?.includes(dayOfWeekValue);
+            if (matchesDay) {
+              // Parse departure time from schedule e.g., "06:15 - 15:30"
+              const routeTime = route.schedule ? route.schedule.split('-')[0].trim() : '08:00';
+              const validTimePattern = /^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/;
+              const timePart = validTimePattern.test(routeTime) ? routeTime : '08:00';
+              const dateTimeStr = `${dateStr}T${timePart}`;
+
+              // Check if already exists to prevent duplicate
+              const alreadyExists = clientCharters.some(
+                trip => trip.clientId === clientId && trip.dateTime === dateTimeStr && trip.description === route.name.toUpperCase()
+              );
+
+              if (!alreadyExists) {
+                await addDoc(collection(db, 'charter_client_trips'), {
+                  client: clientItem.name,
+                  clientId: clientId,
+                  description: route.name.toUpperCase(),
+                  dateTime: dateTimeStr,
+                  origin: "GARAGEM",
+                  destination: "VINCULADO",
+                  value: clientItem.defaultTripValue || 0,
+                  driverId: route.driverId,
+                  vehicleId: route.vehicleId || '',
+                  status: 'pending',
+                  paymentStatus: 'open',
+                  passengerCount: 0,
+                  createdAt: serverTimestamp()
+                });
+                createdCount++;
+              }
+            }
+          }
+          if (createdCount > 0) {
+            toast.success(`${createdCount} viagem(ns) automática(s) preenchida(s) para este dia!`);
+          } else {
+            toast.info("Presença registrada no calendário de cobrança!");
+          }
+        } else {
+          toast.info("Presença registrada no calendário de cobrança!");
+        }
+      } else {
+        // We are toggling OFF. Let's automatically clean up matching trips to keep things synchronized!
+        const tripsToDelete = clientCharters.filter(
+          trip => trip.clientId === clientId && trip.dateTime.startsWith(dateStr)
+        );
+        let deletedCount = 0;
+        for (const trip of tripsToDelete) {
+          await deleteDoc(doc(db, 'charter_client_trips', trip.id));
+          deletedCount++;
+        }
+        if (deletedCount > 0) {
+          toast.info(`Removido e limpo ${deletedCount} viagem(ns) deste dia.`);
+        } else {
+          toast.info("Dia de presença limpo!");
+        }
+      }
+    } catch (e) {
+      handleFirestoreError(e, OperationType.WRITE, 'charter_clients');
+    }
+  };
+
+  const handleAutoFillMonthWithFixedRoutes = async (clientId: string) => {
+    const clientItem = clients.find(c => c.id === clientId);
+    if (!clientItem) return;
+    const fixedRoutes = clientItem.fixedRoutes || [];
+    if (fixedRoutes.length === 0) {
+      toast.error("Nenhuma rota fixa cadastrada no contrato deste cliente.");
+      return;
+    }
+
+    if (!confirm(`Preencher automaticamente todas as viagens deste mês (${format(currentCalendarDate, 'MMMM yyyy')}) baseando-se nas rotas fixas cadastradas?`)) {
+      return;
+    }
+
+    try {
+      // Get first day and last day of current calendar date month
+      const startDay = new Date(currentCalendarDate.getFullYear(), currentCalendarDate.getMonth(), 1);
+      const endDay = new Date(currentCalendarDate.getFullYear(), currentCalendarDate.getMonth() + 1, 0);
+
+      const workedDays = clientItem.workedDays ? [...clientItem.workedDays] : [];
+      let updatedWorkedDays = [...workedDays];
+      let tripsCreated = 0;
+
+      for (let d = new Date(startDay); d <= endDay; d.setDate(d.getDate() + 1)) {
+        const dateStr = format(d, 'yyyy-MM-dd');
+        const dayOfWeekValue = d.getDay();
+
+        // Check matching fixed routes for this day of week
+        const matchingRoutes = fixedRoutes.filter(route => route.daysOfWeek?.includes(dayOfWeekValue));
+        if (matchingRoutes.length > 0) {
+          // Add to workedDays if not present
+          if (!updatedWorkedDays.includes(dateStr)) {
+            updatedWorkedDays.push(dateStr);
+          }
+
+          for (const route of matchingRoutes) {
+            const routeTime = route.schedule ? route.schedule.split('-')[0].trim() : '08:00';
+            const validTimePattern = /^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/;
+            const timePart = validTimePattern.test(routeTime) ? routeTime : '08:00';
+            const dateTimeStr = `${dateStr}T${timePart}`;
+
+            // Check if already exists
+            const alreadyExists = clientCharters.some(
+              trip => trip.clientId === clientId && trip.dateTime === dateTimeStr && trip.description === route.name.toUpperCase()
+            );
+
+            if (!alreadyExists) {
+              await addDoc(collection(db, 'charter_client_trips'), {
+                client: clientItem.name,
+                clientId: clientId,
+                description: route.name.toUpperCase(),
+                dateTime: dateTimeStr,
+                origin: "GARAGEM",
+                destination: "VINCULADO",
+                value: clientItem.defaultTripValue || 0,
+                driverId: route.driverId,
+                vehicleId: route.vehicleId || '',
+                status: 'pending',
+                paymentStatus: 'open',
+                passengerCount: 0,
+                createdAt: serverTimestamp()
+              });
+              tripsCreated++;
+            }
+          }
+        }
+      }
+
+      // Save updated worked days
+      await updateDoc(doc(db, 'charter_clients', clientId), {
+        workedDays: updatedWorkedDays
+      });
+      setSelectedClientDetail({
+        ...clientItem,
+        workedDays: updatedWorkedDays
+      });
+
+      if (tripsCreated > 0) {
+        toast.success(`Mesclado com sucesso! ${tripsCreated} novas viagens automáticas geradas.`);
+      } else {
+        toast.info("Nenhuma nova viagem pendente para este mês.");
+      }
+    } catch (e) {
+      handleFirestoreError(e, OperationType.WRITE, 'charter_clients');
+    }
+  };
+
+  const handleAddFixedRoute = async (clientId: string, newRoute: { name: string; schedule: string; driverId: string; vehicleId?: string; daysOfWeek?: number[] }) => {
+    const clientItem = clients.find(c => c.id === clientId);
+    if (!clientItem) return;
+    const currentFixed = clientItem.fixedRoutes || [];
+    const updatedRoutes = [
+      ...currentFixed,
+      {
+        id: crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 9),
+        ...newRoute
+      }
+    ];
+    try {
+      await updateDoc(doc(db, 'charter_clients', clientId), {
+        fixedRoutes: updatedRoutes
+      });
+      setSelectedClientDetail({
+        ...clientItem,
+        fixedRoutes: updatedRoutes
+      });
+      toast.success("Rota fixa adicionada ao contrato do cliente!");
+      setNewFixedRouteName('');
+      setNewFixedRouteSchedule('');
+      setNewFixedRouteDriverId('');
+      setNewFixedRouteVehicleId('');
+      setNewFixedRouteDays([]);
+    } catch (e) {
+      handleFirestoreError(e, OperationType.WRITE, 'charter_clients');
+    }
+  };
+
+  const handleRemoveFixedRoute = async (clientId: string, routeId: string) => {
+    const clientItem = clients.find(c => c.id === clientId);
+    if (!clientItem) return;
+    const currentFixed = clientItem.fixedRoutes || [];
+    const updatedRoutes = currentFixed.filter(r => r.id !== routeId);
+    try {
+      await updateDoc(doc(db, 'charter_clients', clientId), {
+        fixedRoutes: updatedRoutes
+      });
+      setSelectedClientDetail({
+        ...clientItem,
+        fixedRoutes: updatedRoutes
+      });
+      toast.success("Rota fixa removida.");
+    } catch (e) {
+      handleFirestoreError(e, OperationType.WRITE, 'charter_clients');
+    }
+  };
+
+  // Launch a new custom Client Trip
+  const handleAddNewClientTripSubmit = async () => {
+    if (!newClientCharter.client) {
+      toast.error("Vincule um cliente à operação.");
+      return;
+    }
+    try {
+      const parentClient = clients.find(c => c.id === newClientCharter.clientId);
+      const feeVal = newClientCharter.isExtra 
+        ? (newClientCharter.value || 0)
+        : (parentClient?.defaultTripValue || newClientCharter.value || 0);
+
+      const descriptionVal = isQuickMode && !newClientCharter.description 
+        ? "FRETAMENTO RÁPIDO" 
+        : newClientCharter.description;
+
+      const originVal = isQuickMode && !newClientCharter.origin 
+        ? "A definir" 
+        : newClientCharter.origin;
+
+      const destinationVal = isQuickMode && !newClientCharter.destination 
+        ? "A definir" 
+        : newClientCharter.destination;
+
+      // In case we did batch dates selections in calendar grid
+      if (selectedLaunchDays.length > 0) {
+        for (const date of selectedLaunchDays) {
+          const dtStr = `${date}T${launchTime || '12:00'}`;
+          await addDoc(collection(db, 'charter_client_trips'), {
+            ...newClientCharter,
+            description: descriptionVal,
+            origin: originVal,
+            destination: destinationVal,
+            value: feeVal,
+            dateTime: dtStr,
+            createdAt: serverTimestamp()
+          });
+        }
+        setSelectedLaunchDays([]);
+        toast.success(`Mais ${selectedLaunchDays.length} viagens lançadas em lote!`);
+      } else {
+        const finalDateTime = newClientCharter.dateTime || format(new Date(), "yyyy-MM-dd'T'HH:mm");
+        await addDoc(collection(db, 'charter_client_trips'), {
+          ...newClientCharter,
+          description: descriptionVal,
+          origin: originVal,
+          destination: destinationVal,
+          value: feeVal,
+          dateTime: finalDateTime,
+          createdAt: serverTimestamp()
+        });
+        toast.success("Fretamento avulso registrado!");
+      }
+      setShowClientAddForm(false);
+      setIsQuickMode(false);
+      setNewClientCharter({
+        client: '',
+        clientId: '',
+        description: '',
+        dateTime: '',
+        origin: '',
+        destination: '',
+        value: 0,
+        driverId: '',
+        vehicleId: '',
+        status: 'pending',
+        paymentStatus: 'open',
+        passengerCount: 0,
+        isExtra: false,
+        hasExtraService: false,
+        extraServiceDesc: '',
+        extraServiceVal: 0
+      });
+    } catch (e) {
+      handleFirestoreError(e, OperationType.WRITE, 'charter_client_trips');
+    }
+  };
+
+  const handleUpdateClientTripSubmit = async () => {
+    if (!editingClientCharter) return;
+    try {
+      const { id, ...data } = editingClientCharter;
+      await updateDoc(doc(db, 'charter_client_trips', id), {
+        ...data,
+        updatedAt: serverTimestamp()
+      });
+      setShowClientEditForm(false);
+      setEditingClientCharter(null);
+      toast.success("Serviço de fretamento do cliente atualizado!");
+    } catch (e) {
+      handleFirestoreError(e, OperationType.WRITE, 'charter_client_trips');
+    }
+  };
+
+  const handleDeleteClientTrip = async (id: string) => {
+    if (!confirm("Excluir definitivamente este registro de viagem?")) return;
+    try {
+      await deleteDoc(doc(db, 'charter_client_trips', id));
+      toast.success("Viagem removida do dossiê.");
+    } catch (e) {
+      handleFirestoreError(e, OperationType.WRITE, 'charter_client_trips');
+    }
+  };
+
+  const handleMarkTripAsPaid = async (id: string) => {
+    try {
+      await updateDoc(doc(db, 'charter_client_trips', id), {
+        paymentStatus: 'received',
+        updatedAt: serverTimestamp()
+      });
+      toast.success("Viagem marcada como PAGA!");
+    } catch (e) {
+      handleFirestoreError(e, OperationType.WRITE, 'charter_client_trips');
+    }
+  };
+
+  const handleMarkTripAsBilled = async (id: string) => {
+    try {
+      await updateDoc(doc(db, 'charter_client_trips', id), {
+        paymentStatus: 'billed',
+        updatedAt: serverTimestamp()
+      });
+      toast.success("Viagem marcada como FATURADA!");
+    } catch (e) {
+      handleFirestoreError(e, OperationType.WRITE, 'charter_client_trips');
+    }
+  };
+
+  const handleClearClientTripHistory = async (clientId: string, clientName: string) => {
+    if (!clientId) return;
+    const isConfirmed = confirm(`ATENÇÃO: Tem certeza absoluta que deseja APAGAR TODO O HISTÓRICO de lançamentos de viagens para o cliente "${clientName}"? Esta ação é irreversível.`);
+    if (!isConfirmed) return;
+    
+    try {
+      const nameLower = clientName.toLowerCase();
+      const tripsToDelete = clientCharters.filter(t => t.clientId === clientId || t.client?.toLowerCase() === nameLower);
+      
+      if (tripsToDelete.length === 0) {
+        toast.info("Não há viagens no histórico deste cliente para apagar.");
+        return;
+      }
+      
+      for (const t of tripsToDelete) {
+        await deleteDoc(doc(db, 'charter_client_trips', t.id));
+      }
+      toast.success(`Histórico limpo! ${tripsToDelete.length} registros de viagens foram apagados.`);
+    } catch (e) {
+      handleFirestoreError(e, OperationType.WRITE, 'charter_client_trips');
+    }
+  };
+
+  // Closing Dossier Modal Operations wrappers
+  const handleBulkUpdateClosingTrips = async (option: 'billed' | 'received') => {
+    const isSuccess = confirm(`Tem certeza que deseja declarar as viagens marcadas como ${option.toUpperCase()}?`);
+    if (!isSuccess) return;
+
+    try {
+      const tIds = Object.keys(selectedClosingTrips).filter(id => selectedClosingTrips[id]);
+      for (const id of tIds) {
+        await updateDoc(doc(db, 'charter_client_trips', id), {
+          paymentStatus: option,
+          updatedAt: serverTimestamp()
+        });
+      }
+      setIsClosingModalOpen(false);
+      setClosingPreviewData(null);
+      toast.success(`${tIds.length} viagens faturadas e atualizadas com sucesso!`);
+    } catch (e) {
+      handleFirestoreError(e, OperationType.WRITE, 'charter_client_trips');
+    }
+  };
+
+  const handleSendWhatsAppClosingSummary = () => {
+    if (!selectedClientDetail) return;
+    const clientPhone = selectedClientDetail.phone ? selectedClientDetail.phone.replace(/\D/g, '') : '';
+    const openTrips = filteredClosingTrips.filter(t => selectedClosingTrips[t.id]);
+    
+    let total = 0;
+    let message = `*DM TURISMO - FECHAMENTO OPERACIONAL*\n\n`;
+    message += `Prezado financeiro *${selectedClientDetail.name.toUpperCase()}*,\n`;
+    message += `Seguem as ordens de saídas e fretamentos organizados para fins de conferência nesta competência:\n\n`;
+    
+    openTrips.forEach((trip, index) => {
+      const baseVal = trip.isExtra ? (trip.value || 0) : (selectedClientDetail.defaultTripValue || trip.value || 0);
+      const extraVal = (trip.hasExtraService && trip.extraServiceVal) ? trip.extraServiceVal : 0;
+      const dailyRate = baseVal + extraVal;
+      total += dailyRate;
+      message += `*${(index + 1).toString().padStart(2, '0')}.* ${safeFormatDate(trip.dateTime, 'dd/MM/yyyy HH:mm')} - R$ ${dailyRate.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}\n`;
+      message += `Route: ${trip.description.toUpperCase()}${trip.hasExtraService ? ` (+ EXTRA: ${trip.extraServiceDesc?.toUpperCase()} - R$ ${trip.extraServiceVal?.toLocaleString('pt-BR', { minimumFractionDigits: 2 })})` : ''}\n`;
+      message += `📍 ${trip.origin || ''} -> ${trip.destination || ''}\n\n`;
+    });
+    
+    message += `------------------------------------\n`;
+    message += `*TOTAL DE SERVIÇOS:* ${openTrips.length} viagem(ns)\n`;
+    message += `*VALOR CONSOLIDADO:* R$ ${total.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}\n\n`;
+    message += `Ficamos no aguardo da aprovação para faturamento/liquidação. Obrigado pela parceria! DM Turismo.`;
+    
+    window.open(`https://api.whatsapp.com/send?phone=55${clientPhone}&text=${encodeURIComponent(message)}`, '_blank');
+    toast.success('Rascunho de fechamento preparado e enviado para o WhatsApp.');
+  };
+
+  const handleSendEmailClosingSummary = () => {
+    if (!selectedClientDetail) return;
+    const clientEmail = selectedClientDetail.email || '';
+    const openTrips = filteredClosingTrips.filter(t => selectedClosingTrips[t.id]);
+    
+    let total = 0;
+    let subject = `DM TURISMO - FECHAMENTO OPERACIONAL - ${selectedClientDetail.name.toUpperCase()}`;
+    let body = `Prezado departamento financeiro da ${selectedClientDetail.name.toUpperCase()},\n\n`;
+    body += `Esperamos que este e-mail o encontre bem.\n\n`;
+    body += `Apresentamos o relatório de fechamento das viagens e fretamentos realizados na competência selecionada:\n\n`;
+    
+    openTrips.forEach((trip, index) => {
+      const baseVal = trip.isExtra ? (trip.value || 0) : (selectedClientDetail.defaultTripValue || trip.value || 0);
+      const extraVal = (trip.hasExtraService && trip.extraServiceVal) ? trip.extraServiceVal : 0;
+      const dailyRate = baseVal + extraVal;
+      total += dailyRate;
+      body += `${index + 1}. ${safeFormatDate(trip.dateTime, 'dd/MM/yyyy HH:mm')} - R$ ${dailyRate.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}\n`;
+      body += `   Itinerário: ${trip.description.toUpperCase()}${trip.hasExtraService ? ` (+ EXTRA: ${trip.extraServiceDesc?.toUpperCase()} - R$ ${trip.extraServiceVal?.toLocaleString('pt-BR', { minimumFractionDigits: 2 })})` : ''}\n`;
+      body += `   Trajeto: ${trip.origin || ''} -> ${trip.destination || ''}\n\n`;
+    });
+    
+    body += `------------------------------------\n`;
+    body += `TOTAL DE SERVIÇOS: ${openTrips.length} viagem(ns)\n`;
+    body += `VALOR CONSOLIDADO: R$ ${total.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}\n\n`;
+    body += `O arquivo PDF detalhado contendo as especificações operacionais de cada trecho foi anexado ao nosso faturamento.\n`;
+    body += `Solicitamos a validação dos lançamentos para darmos prosseguimento à emissão da Nota Fiscal e Boleto Bancário.\n\n`;
+    body += `Qualquer dúvida ou ajuste, estamos à inteira disposição.\n\n`;
+    body += `Atenciosamente,\n`;
+    body += `Financeiro - DM Turismo Pro\n`;
+    
+    window.open(`mailto:${clientEmail}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`, '_blank');
+    toast.success('Rascunho de e-mail financeiro preparado para envio!');
+  };
+
+  // Confirm Modal state wrapper
+  const [deleteConfirm, setDeleteConfirm] = useState<{ 
+    isOpen: boolean; 
+    onConfirm: () => void; 
+    title: string; 
+    message: string;
+  }>({
     isOpen: false,
     onConfirm: () => {},
     title: '',
     message: ''
   });
 
-  const handleDeleteRoute = (id: string, name: string) => {
+  const handleDeleteRoutePrompt = (id: string, name: string) => {
     setDeleteConfirm({
       isOpen: true,
       title: 'Excluir Fretamento',
@@ -143,1411 +1305,2523 @@ export const CharteredRoutes = ({ vehicles, employees, routes }: { vehicles: any
     });
   };
 
-  const handleImportLocation = (url: string) => {
-    if (!url) {
-      toast.error('Informe um link do Google Maps.');
-      return;
-    }
-    if (!url.includes('google.com/maps') && !url.includes('maps.app.goo.gl')) {
-      toast.error('Link do Google Maps inválido.');
-      return;
-    }
-    toast.success('Localização reconhecida e importada com sucesso!');
+  const handleToggleDaySelectionInLaunch = (dateStr: string) => {
+    setSelectedLaunchDays(prev => 
+      prev.includes(dateStr) ? prev.filter(d => d !== dateStr) : [...prev, dateStr]
+    );
   };
 
-  const handleAddRoute = async () => {
-    if (!newRoute.name || !newRoute.client) {
-      toast.error('Preencha os campos obrigatórios (Nome e Cliente).');
-      return;
-    }
+  const handleToggleAllDaysInMonthInLaunch = () => {
+    const year = launchCalendarDate.getFullYear();
+    const month = launchCalendarDate.getMonth();
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
     
-    try {
-      const dataToSave = {
-        ...newRoute,
-        passengerCount: newRoute.passengers?.length || 0,
-        status: 'active',
-        createdAt: serverTimestamp()
-      };
-      await addDoc(collection(db, 'chartered_routes'), dataToSave);
-      setShowAddForm(false);
-      setNewRoute({
-        name: '',
-        client: '',
-        type: 'factory',
-        daysOfWeek: [1, 2, 3, 4, 5],
-        schedules: [{ departureTime: '', returnTime: '' }],
-        locationUrl: '',
-        passengerCount: 0,
-        fixedVehicleId: '',
-        fixedDriverId: '',
-        passengerName: '',
-        passengerPhone: '',
-        runState: 'idle',
-        passengers: []
-      });
-      toast.success('Nova rota de fretamento cadastrada com os passageiros!');
-    } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, 'chartered_routes');
-    }
-  };
-
-  const handleOpenEdit = (route: CharteredRoute) => {
-    setEditingRoute({
-      id: route.id,
-      name: route.name || '',
-      client: route.client || '',
-      type: route.type || 'factory',
-      daysOfWeek: route.daysOfWeek || [1, 2, 3, 4, 5],
-      schedules: route.schedules?.length ? route.schedules : [{ departureTime: '', returnTime: '' }],
-      locationUrl: route.locationUrl || '',
-      passengerCount: route.passengerCount || 0,
-      fixedVehicleId: route.fixedVehicleId || '',
-      fixedDriverId: route.fixedDriverId || '',
-      passengerName: route.passengerName || '',
-      passengerPhone: route.passengerPhone || '',
-      status: route.status || 'active',
-      runState: route.runState || 'idle',
-      passengers: route.passengers || []
-    });
-    setShowEditForm(true);
-  };
-
-  const handleUpdateRoute = async () => {
-    if (!editingRoute.name || !editingRoute.client) {
-      toast.error('Preencha os campos obrigatórios.');
-      return;
+    const allDays: string[] = [];
+    for (let d = 1; d <= daysInMonth; d++) {
+      allDays.push(`${year}-${String(month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`);
     }
 
-    try {
-      const { id, ...dataToSave } = editingRoute;
-      await updateDoc(doc(db, 'chartered_routes', id), {
-        ...dataToSave,
-        passengerCount: editingRoute.passengers?.length || 0,
-        updatedAt: serverTimestamp()
-      });
-      setShowEditForm(false);
-      setEditingRoute(null);
-      toast.success('Fretamento atualizado com sucesso!');
-    } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, 'chartered_routes');
-    }
-  };
-
-  const handleToggleRunRoute = async (route: CharteredRoute) => {
-    const isStarting = route.runState !== 'running';
-    try {
-      await updateDoc(doc(db, 'chartered_routes', route.id), {
-        runState: isStarting ? 'running' : 'idle',
-        runStartedAt: isStarting ? new Date().toISOString() : null
-      });
-      
-      if (isStarting) {
-        setIsFloatingNavDismissed(false);
-        toast.info(`Fretamento ${route.name.toUpperCase()} iniciado! Boa viagem!`);
-        
-        // Reset the navigation index for this route to 0 on start
-        setNavIndexes(prev => {
-          const updated = { ...prev, [route.id]: 0 };
-          localStorage.setItem('active_route_nav_' + route.id, '0');
-          return updated;
-        });
-
-        // Sequences up to 20 passenger locations
-        const navPassengers = (route.passengers || []).slice(0, 20);
-        const firstPassenger = navPassengers[0];
-        
-        // Prioritize the first passenger's departure location with directions query initialized
-        const mapsUrl = getMapsDirUrl(
-          firstPassenger?.locationUrl, 
-          firstPassenger?.name ? `${firstPassenger.name} ${route.client}` : `${route.name} ${route.client}`
-        );
-
-        getMapsDirUrl(firstPassenger?.locationUrl, firstPassenger?.name ? `${firstPassenger.name} ${route.client}` : `${route.name} ${route.client}`);
-
-        if (mapsUrl) {
-          window.open(mapsUrl, '_blank');
-        } else {
-          // General maps query fallback using route info with dir api
-          window.open(`https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(route.name + ' ' + route.client)}`, '_blank');
-        }
-
-        if (firstPassenger?.phone) {
-          const cleanPhone = firstPassenger.phone.replace(/\D/g, '');
-          if (cleanPhone) {
-            const passengerMsg = encodeURIComponent(`Olá ${firstPassenger.name}, seu transporte DM Turismo iniciou a rota e está a caminho do seu ponto de embarque.`);
-            window.open(`https://api.whatsapp.com/send?phone=55${cleanPhone}&text=${passengerMsg}`, '_blank');
-          }
-        } else if (route.passengerPhone) {
-          const cleanPhone = route.passengerPhone.replace(/\D/g, '');
-          if (cleanPhone) {
-            const passengerMsg = encodeURIComponent(`Olá ${route.passengerName || 'cliente'}, o seu fretamento contratado da DM Turismo acaba de iniciar a rota e está a caminho.`);
-            window.open(`https://api.whatsapp.com/send?phone=55${cleanPhone}&text=${passengerMsg}`, '_blank');
-          }
-        }
-      } else {
-        toast.success(`Fretamento ${route.name.toUpperCase()} concluído e registrado.`);
-      }
-    } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, 'chartered_routes');
-    }
-  };
-
-  const handleGoToNextPassenger = (route: CharteredRoute, totalLength: number) => {
-    const currentIndex = navIndexes[route.id] || 0;
-    if (currentIndex < totalLength - 1) {
-      const nextIndex = currentIndex + 1;
-      setNavIndexes(prev => {
-        const updated = { ...prev, [route.id]: nextIndex };
-        localStorage.setItem('active_route_nav_' + route.id, String(nextIndex));
-        return updated;
-      });
-
-      const navPassengers = (route.passengers || []).slice(0, 20);
-      const nextPassenger = navPassengers[nextIndex];
-      const mapsUrl = getMapsDirUrl(
-        nextPassenger?.locationUrl, 
-        nextPassenger?.name ? `${nextPassenger.name} ${route.client}` : `${route.name} ${route.client}`
-      );
-
-      if (mapsUrl) {
-        window.open(mapsUrl, '_blank');
-      } else {
-        window.open(`https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent((nextPassenger?.name || '') + ' ' + route.client)}`, '_blank');
-      }
-
-      if (nextPassenger?.phone) {
-        const cleanPhone = nextPassenger.phone.replace(/\D/g, '');
-        if (cleanPhone) {
-          const passengerMsg = encodeURIComponent(`Olá ${nextPassenger.name}, o transporte da DM Turismo está a caminho do seu ponto de embarque.`);
-          window.open(`https://api.whatsapp.com/send?phone=55${cleanPhone}&text=${passengerMsg}`, '_blank');
-        }
-      }
-      toast.success(`Avançado para o passageiro ${nextIndex + 1}: ${nextPassenger?.name || 'Sem nome'}`);
+    if (selectedLaunchDays.length === allDays.length) {
+      setSelectedLaunchDays([]);
     } else {
-      // Final step -> Concluir rota!
-      handleToggleRunRoute(route);
+      setSelectedLaunchDays(allDays);
     }
   };
 
-  const handleGoToPrevPassenger = (route: CharteredRoute) => {
-    const currentIndex = navIndexes[route.id] || 0;
-    if (currentIndex > 0) {
-      const prevIndex = currentIndex - 1;
-      setNavIndexes(prev => {
-        const updated = { ...prev, [route.id]: prevIndex };
-        localStorage.setItem('active_route_nav_' + route.id, String(prevIndex));
-        return updated;
-      });
-
-      const navPassengers = (route.passengers || []).slice(0, 20);
-      const prevPassenger = navPassengers[prevIndex];
-      const mapsUrl = getMapsDirUrl(
-        prevPassenger?.locationUrl, 
-        prevPassenger?.name ? `${prevPassenger.name} ${route.client}` : `${route.name} ${route.client}`
-      );
-
-      if (mapsUrl) {
-        window.open(mapsUrl, '_blank');
-      }
-
-      toast.info(`Retornado para o passageiro ${prevIndex + 1}: ${prevPassenger?.name || 'Sem nome'}`);
-    }
-  };
-
-  const toggleRouteStatus = async (id: string, currentStatus: string) => {
-    try {
-      await updateDoc(doc(db, 'chartered_routes', id), {
-        status: currentStatus === 'active' ? 'inactive' : 'active'
-      });
-    } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, 'chartered_routes');
-    }
-  };
-
-  const handleAddPassenger = (state: any, setState: any) => {
-    const currentPassengers = state.passengers || [];
-    if (currentPassengers.length >= 30) {
-      toast.warning('Limite máximo de 30 passageiros atingido.');
-      return;
-    }
-    const updated = [
-      ...currentPassengers,
-      { name: '', phone: '', locationUrl: '', boardingTime: '' }
-    ];
-    setState({ ...state, passengers: updated, passengerCount: updated.length });
-  };
-
-  const handleRemovePassenger = (state: any, setState: any, index: number) => {
-    const currentPassengers = state.passengers || [];
-    const updated = currentPassengers.filter((_: any, i: number) => i !== index);
-    setState({ ...state, passengers: updated, passengerCount: updated.length });
-  };
-
-  const handleUpdatePassenger = (state: any, setState: any, index: number, field: string, value: string) => {
-    const currentPassengers = state.passengers || [];
-    const updated = currentPassengers.map((p: any, i: number) => {
-      if (i === index) {
-        return { ...p, [field]: value };
-      }
-      return p;
-    });
-    setState({ ...state, passengers: updated });
-  };
-
-  const renderPassengersSection = (state: any, setState: any) => {
-    const list = state.passengers || [];
-    return (
-      <div className="space-y-4 bg-zinc-950 p-5 rounded-3xl border border-zinc-850">
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 pb-3 border-b border-zinc-850">
-          <div>
-            <label className="text-xs font-black text-brand-accent uppercase tracking-widest flex items-center gap-2">
-              <Users size={14} />
-              Lista de Passageiros ({list.length}/30)
-            </label>
-            <p className="text-[9px] text-zinc-500 font-bold uppercase mt-0.5">Cadastre até 30 passageiros com contato, horário e local de embarque</p>
-          </div>
-          <button
-            type="button"
-            onClick={() => handleAddPassenger(state, setState)}
-            disabled={list.length >= 30}
-            className={cn(
-              "px-3 py-1.5 rounded-xl text-[9px] font-black uppercase tracking-wider flex items-center gap-1 transition-all cursor-pointer",
-              list.length >= 30
-                ? "bg-zinc-900 text-zinc-650 border border-zinc-800 cursor-not-allowed"
-                : "bg-brand-accent text-zinc-950 hover:bg-white border border-brand-accent active:scale-95"
-            )}
-          >
-            <Plus size={12} />
-            ADICIONAR PASSAGEIRO
-          </button>
-        </div>
-
-        <div className="max-h-[300px] overflow-y-auto space-y-3 pr-1 scrollbar-thin scrollbar-thumb-zinc-800">
-          {list.length === 0 ? (
-            <div className="text-center py-8 text-zinc-650 text-[10px] font-bold uppercase italic flex flex-col items-center justify-center gap-2">
-              <Users size={24} className="text-zinc-800" />
-              Nenhum passageiro individual cadastrado nesta rota.
-            </div>
-          ) : (
-            list.map((passenger: any, idx: number) => (
-              <div key={idx} className="p-4 bg-zinc-900 border border-zinc-850 rounded-2xl space-y-3 relative group/item">
-                <div className="flex justify-between items-center">
-                  <span className="text-[9px] font-black text-zinc-400 uppercase tracking-widest">
-                    #{(idx + 1).toString().padStart(2, '0')} - Passageiro
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => handleRemovePassenger(state, setState, idx)}
-                    className="text-rose-500 hover:text-white text-[9px] font-black uppercase tracking-widest cursor-pointer px-2.5 py-1 rounded-lg hover:bg-rose-500/10 transition-all"
-                  >
-                    Excluir
-                  </button>
-                </div>
-                <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-                  <div className="space-y-1">
-                    <label className="text-[8px] font-black text-zinc-500 uppercase tracking-widest ml-1">Nome / Ponto</label>
-                    <Input
-                      placeholder="Ex: Carlos Silva"
-                      className="text-xs h-9 bg-zinc-950"
-                      value={passenger.name || ''}
-                      onChange={(e) => handleUpdatePassenger(state, setState, idx, 'name', e.target.value)}
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-[8px] font-black text-zinc-500 uppercase tracking-widest ml-1">Horário Est.</label>
-                    <Input
-                      placeholder="Ex: 06:30"
-                      className="text-xs h-9 bg-zinc-950"
-                      value={passenger.boardingTime || ''}
-                      onChange={(e) => handleUpdatePassenger(state, setState, idx, 'boardingTime', e.target.value)}
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-[8px] font-black text-zinc-500 uppercase tracking-widest ml-1">WhatsApp (DDD+Nº)</label>
-                    <Input
-                      placeholder="Ex: 11999999999"
-                      className="text-xs h-9 bg-zinc-950"
-                      value={passenger.phone || ''}
-                      onChange={(e) => handleUpdatePassenger(state, setState, idx, 'phone', e.target.value)}
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-[8px] font-black text-zinc-500 uppercase tracking-widest ml-1">Maps Embarque</label>
-                    <div className="flex gap-1.5">
-                      <Input
-                        placeholder="Link do Google Maps..."
-                        className="text-xs h-9 bg-zinc-950 flex-1"
-                        value={passenger.locationUrl || ''}
-                        onChange={(e) => handleUpdatePassenger(state, setState, idx, 'locationUrl', e.target.value)}
-                      />
-                      {passenger.locationUrl && (
-                        <button
-                          type="button"
-                          onClick={() => handleImportLocation(passenger.locationUrl)}
-                          className="px-2 h-9 bg-zinc-900 border border-zinc-800 text-[8px] text-zinc-400 hover:text-white rounded-lg font-black uppercase hover:border-brand-accent transition-colors shrink-0"
-                          title="Testar Link"
-                        >
-                          TESTAR
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            ))
-          )}
-        </div>
-      </div>
+  // Continuous routes filtering query
+  const listedRoutes = useMemo(() => {
+    const q = searchQuery.toLowerCase().trim();
+    if (!q) return routes;
+    return routes.filter(r => 
+      r.name?.toLowerCase().includes(q) ||
+      r.client?.toLowerCase().includes(q)
     );
-  };
-
-  const getDayLabel = (day: number) => {
-    const labels = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
-    return labels[day];
-  };
-
-  const filteredRoutes = routes.filter(route => 
-    route.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    route.client.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    (route.passengerName && route.passengerName.toLowerCase().includes(searchQuery.toLowerCase()))
-  );
-
-  const employeesDrivers = employees.sort((a, b) => a.name.localeCompare(b.name));
-  const vehiclesOrdered = vehicles.sort((a, b) => (a.plate || '').localeCompare(b.plate || ''));
-
-  const renderDaysSelector = (state: any, setState: any) => {
-    const toggleDay = (day: number) => {
-      const current = state.daysOfWeek || [];
-      const updated = current.includes(day)
-        ? current.filter((d: number) => d !== day)
-        : [...current, day].sort((a, b) => a - b);
-      setState({ ...state, daysOfWeek: updated });
-    };
-
-    return (
-      <div className="flex flex-wrap gap-2">
-        {[1, 2, 3, 4, 5, 6, 0].map(d => {
-          const isActive = (state.daysOfWeek || []).includes(d);
-          return (
-            <button
-              key={d}
-              type="button"
-              onClick={() => toggleDay(d)}
-              className={cn(
-                "w-12 h-10 rounded-xl flex items-center justify-center font-black text-xs transition-all active:scale-95 border cursor-pointer",
-                isActive 
-                  ? "bg-brand-accent text-zinc-950 border-brand-accent shadow" 
-                  : "bg-zinc-950 text-zinc-500 border-zinc-800 hover:border-zinc-700 hover:text-white"
-              )}
-            >
-              {getDayLabel(d)}
-            </button>
-          );
-        })}
-      </div>
-    );
-  };
-
-  const renderSchedulesSelector = (state: any, setState: any) => {
-    const currentSchedule = state.schedules?.[0] || { departureTime: '', returnTime: '' };
-    return (
-      <div className="grid grid-cols-2 gap-4 bg-zinc-950 p-4 rounded-2xl border border-zinc-850">
-        <div className="space-y-1">
-          <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest ml-1">Horário de Início (Ida)</label>
-          <Input 
-            type="time"
-            value={currentSchedule.departureTime || ''}
-            onChange={(e) => {
-              const updated = [{ departureTime: e.target.value, returnTime: currentSchedule.returnTime }];
-              setState({ ...state, schedules: updated });
-            }}
-          />
-        </div>
-        <div className="space-y-1">
-          <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest ml-1">Horário de Término (Volta)</label>
-          <Input 
-            type="time"
-            value={currentSchedule.returnTime || ''}
-            onChange={(e) => {
-              const updated = [{ departureTime: currentSchedule.departureTime, returnTime: e.target.value }];
-              setState({ ...state, schedules: updated });
-            }}
-          />
-        </div>
-      </div>
-    );
-  };
-
-  const renderLocationAndPassengerFields = (state: any, setState: any) => {
-    return (
-      <div className="space-y-4">
-        <div className="flex items-center justify-between">
-          <label className="text-[10px] font-black text-brand-accent uppercase tracking-widest flex items-center gap-2">
-            <MapPin size={14} />
-            Configuração de Localização e Contato
-          </label>
-          <span className="text-[9px] text-zinc-650 font-bold uppercase italic">Integração Maps + WhatsApp</span>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 p-4 bg-zinc-950 rounded-2xl border border-zinc-850">
-          <div className="space-y-1 md:col-span-1">
-            <label className="text-[9px] font-black text-zinc-500 uppercase tracking-widest ml-1">Localização (Google Maps)</label>
-            <div className="flex gap-1.5">
-              <Input 
-                placeholder="Link do Google Maps..." 
-                className="flex-1 text-xs"
-                value={state.locationUrl || ''}
-                onChange={(e) => setState({...state, locationUrl: e.target.value})}
-              />
-              <button
-                type="button"
-                onClick={() => handleImportLocation(state.locationUrl)}
-                className="px-3 bg-zinc-900 hover:bg-zinc-800 text-[9px] font-black uppercase text-zinc-400 border border-zinc-800 rounded-xl transition-all"
-                title="Verificar Link"
-              >
-                TESTAR
-              </button>
-            </div>
-          </div>
-
-          <div className="space-y-1">
-            <label className="text-[9px] font-black text-zinc-500 uppercase tracking-widest ml-1">Nome do Passageiro Principal</label>
-            <Input 
-              placeholder="Nome do passageiro..." 
-              className="text-xs"
-              value={state.passengerName || ''}
-              onChange={(e) => setState({...state, passengerName: e.target.value})}
-            />
-          </div>
-
-          <div className="space-y-1">
-            <label className="text-[9px] font-black text-zinc-500 uppercase tracking-widest ml-1">WhatsApp do Passageiro</label>
-            <Input 
-              placeholder="EX: 11999999999" 
-              className="text-xs"
-              value={state.passengerPhone || ''}
-              onChange={(e) => setState({...state, passengerPhone: e.target.value})}
-            />
-          </div>
-        </div>
-      </div>
-    );
-  };
-
-  const renderResourceAllocationFields = (state: any, setState: any) => {
-    return (
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 p-4 bg-zinc-950 rounded-2xl border border-zinc-850">
-        <div className="space-y-1">
-          <Select
-            label="Motorista Alocado"
-            value={state.fixedDriverId || ''}
-            onChange={(e: any) => setState({ ...state, fixedDriverId: e.target.value })}
-            options={[
-              { value: '', label: 'NENHUM MOTORISTA ALOCADO' },
-              ...employeesDrivers.map((e: any) => ({
-                value: e.id,
-                label: `${e.name.toUpperCase()} (${e.role?.toUpperCase() || 'EQUIPE'})`
-              })),
-              { value: 'other', label: 'OUTROS' }
-            ]}
-          />
-        </div>
-        <div className="space-y-1">
-          <Select
-            label="Veículo Alocado"
-            value={state.fixedVehicleId || ''}
-            onChange={(e: any) => setState({ ...state, fixedVehicleId: e.target.value })}
-            options={[
-              { value: '', label: 'NENHUM VEÍCULO ALOCADO' },
-              ...vehiclesOrdered.map((v: any) => ({
-                value: v.id,
-                label: `${v.plate?.toUpperCase()} - ${v.model?.toUpperCase()} (${v.type?.toUpperCase() || 'VEÍCULO'})`
-              })),
-              { value: 'other', label: 'OUTROS' }
-            ]}
-          />
-        </div>
-      </div>
-    );
-  };
+  }, [routes, searchQuery]);
 
   return (
-    <div className="space-y-6">
-      {/* Header Actions */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div>
-          <h2 className="text-2xl font-black text-white uppercase tracking-tight">Gestão de Fretamento</h2>
-          <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest mt-1 italic">Operação de Rotas Fixas e Contratos Mensais</p>
-        </div>
-        <div className="flex items-center gap-3">
-          <div className="relative group">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500 group-focus-within:text-brand-accent transition-colors" size={18} />
-            <input 
-              type="text" 
-              placeholder="Pesquisar contrato, rota ou passageiro..." 
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="bg-zinc-900 border border-zinc-800 rounded-2xl py-3 pl-10 pr-4 text-zinc-300 text-xs focus:ring-1 focus:ring-brand-accent focus:border-brand-accent outline-none w-full md:w-64 transition-all"
-            />
+    <div className="p-1 md:p-6 space-y-6">
+      {/* Action Assist Widget Overlay GPS */}
+      <AnimatePresence>
+        {isGpsPanelOpen && activeGpsRoute && (
+          <GpsAssistant
+            activeGpsRoute={activeGpsRoute}
+            activeGpsPassengerIndex={activeGpsPassengerIndex}
+            isGpsPanelOpen={isGpsPanelOpen}
+            isGpsMiniMenuOpen={isGpsMiniMenuOpen}
+            isGpsBubbleOnlyMode={isGpsBubbleOnlyMode}
+            isBubbleMinimized={isBubbleMinimized}
+            userCoords={userCoords}
+            onCloseGps={() => {
+              if (activeGpsRoute) {
+                updateDoc(doc(db, 'chartered_routes', activeGpsRoute.id), { runState: 'idle' }).catch(console.error);
+              }
+              setActiveGpsRoute(null);
+              setIsGpsPanelOpen(false);
+            }}
+            onNextPassenger={handleNextPassenger}
+            onPrevPassenger={handlePrevPassenger}
+            onSelectPassengerIndex={handleSelectPassengerIndex}
+            onToggleBubbleMode={setIsGpsBubbleOnlyMode}
+            onToggleMinimized={() => setIsBubbleMinimized(!isBubbleMinimized)}
+          />
+        )}
+      </AnimatePresence>
+
+      {/* Main Top Header and Selector Tabs */}
+      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-zinc-950 p-6 border border-zinc-900 rounded-[32px] shadow-sm">
+        <div className="flex items-center gap-4">
+          <div className="w-12 h-12 bg-brand-accent/10 border border-brand-accent/20 rounded-2xl flex items-center justify-center text-brand-accent shadow">
+            <Route size={24} />
           </div>
-          <Button onClick={() => setShowAddForm(true)} className="bg-brand-accent text-zinc-950 px-6 font-black rounded-2xl">
-            <Plus size={20} />
-            NOVA ROTA
-          </Button>
+          <div>
+            <span className="text-[8px] font-black tracking-widest text-[#ff6b00] uppercase font-sans">DM Fretamento</span>
+            <h1 className="text-xl md:text-2xl font-black text-white uppercase tracking-tight">Gestão de Fretamentos</h1>
+          </div>
         </div>
+
+        {hasClientCharterAccess && (
+          <div className="flex gap-1.5 w-full sm:w-auto">
+            <button
+              onClick={() => setShowClientAddForm(true)}
+              className="py-2.5 px-5 bg-brand-accent hover:bg-white text-zinc-950 rounded-2xl text-[10px] font-black uppercase tracking-wider flex items-center justify-center gap-2 cursor-pointer shadow transition-all"
+            >
+              <Plus size={14} /> Lançar Viagem
+            </button>
+          </div>
+        )}
       </div>
 
-      {/* Quick Overview */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <div className="p-4 bg-zinc-900 border border-zinc-800 rounded-3xl">
-          <p className="text-[8px] font-black text-zinc-500 uppercase tracking-widest mb-1">Rotas Ativas</p>
-          <div className="flex items-end justify-between">
-            <p className="text-xl font-black text-white">{filteredRoutes.filter(r => r.status === 'active').length}</p>
-            <Route size={20} className="text-brand-accent/40" />
-          </div>
-        </div>
-        <div className="p-4 bg-zinc-900 border border-zinc-800 rounded-3xl">
-          <p className="text-[8px] font-black text-zinc-500 uppercase tracking-widest mb-1">Passageiros/Dia</p>
-          <div className="flex items-end justify-between">
-            <p className="text-xl font-black text-white">{filteredRoutes.reduce((acc, r) => acc + (r.passengerCount || 0), 0)}</p>
-            <Users size={20} className="text-emerald-500/40" />
-          </div>
-        </div>
-        <div className="p-4 bg-zinc-900 border border-zinc-800 rounded-3xl">
-          <p className="text-[8px] font-black text-zinc-500 uppercase tracking-widest mb-1">Veículos Alocados</p>
-          <div className="flex items-end justify-between">
-            <p className="text-xl font-black text-white">{filteredRoutes.filter(r => r.fixedVehicleId).length}</p>
-            <Building2 size={20} className="text-blue-500/40" />
-          </div>
-        </div>
-        <div className="p-4 bg-zinc-900 border border-zinc-800 rounded-3xl">
-          <p className="text-[8px] font-black text-zinc-500 uppercase tracking-widest mb-1">Faturamento Previsto</p>
-          <div className="flex items-end justify-between">
-            <p className="text-xl font-black text-emerald-500">R$ --</p>
-            <Clock size={20} className="text-emerald-500/40" />
-          </div>
-        </div>
-      </div>
-
-      {/* Routes Grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {filteredRoutes.map((route) => {
-          const allocatedVehicle = vehicles.find(v => v.id === route.fixedVehicleId);
-          const allocatedDriver = employees.find(e => e.id === route.fixedDriverId);
-
-          return (
-            <div key={route.id} className={cn(
-              "bg-zinc-900 border rounded-[32px] overflow-hidden group transition-all duration-300 relative",
-              route.runState === 'running' 
-                ? "border-rose-500 shadow-[0_0_20px_rgba(239,68,68,0.15)] ring-1 ring-rose-500/30" 
-                : "border-zinc-800 hover:border-brand-accent/30"
-            )}>
-              {/* Pulse animation banner for running routes */}
-              {route.runState === 'running' && (
-                <div className="bg-rose-950/40 border-b border-rose-900 px-6 py-2 flex items-center justify-between text-rose-500">
-                  <span className="flex items-center gap-2 text-[8px] font-black uppercase tracking-widest">
-                    <span className="w-2 h-2 rounded-full bg-rose-500 animate-pulse" />
-                    Rota em Curso Ativo
-                  </span>
-                  {route.runStartedAt && (
-                    <span className="text-[8px] font-bold text-rose-400">
-                      Início: {format(new Date(route.runStartedAt), 'dd/MM, HH:mm')}
-                    </span>
-                  )}
-                </div>
-              )}
-
-              <div className="p-6">
-                <div className="flex justify-between items-start mb-4">
-                  <div>
-                    <div className="flex items-center gap-2 mb-1">
-                      <span className={cn(
-                        "px-2 py-0.5 rounded-full text-[8px] font-black uppercase tracking-widest border",
-                        route.type === 'factory' ? "bg-blue-500/10 text-blue-500 border-blue-500/20" : "bg-emerald-500/10 text-emerald-500 border-emerald-500/20"
-                      )}>
-                        {route.type === 'factory' ? 'INDÚSTRIA' : route.type === 'school' ? 'ESCOLAR' : 'OUTROS'}
-                      </span>
-                      <span className={cn(
-                        "px-2 py-0.5 rounded-full text-[8px] font-black uppercase tracking-widest border transition-all cursor-pointer hover:scale-105 active:scale-95",
-                        route.status === 'active' ? "bg-emerald-500/10 text-emerald-500 border-emerald-500/20" : "bg-zinc-800 text-zinc-500 border-zinc-700"
-                      )}
-                      onClick={() => toggleRouteStatus(route.id, route.status)}
-                      title={route.status === 'active' ? 'Clique para desativar' : 'Clique para ativar'}
-                      >
-                        {route.status === 'active' ? 'ATIVA' : 'INATIVA'}
-                      </span>
-                    </div>
-                    <h3 className="text-lg font-black text-white uppercase tracking-tight">{route.name}</h3>
-                    <div className="flex items-center gap-1 text-[10px] text-zinc-500 font-bold uppercase mt-1">
-                      <Building2 size={12} className="text-brand-accent" />
-                      {route.client}
-                    </div>
-                  </div>
-                  <div className="flex gap-2">
-                    <button 
-                      onClick={() => handleOpenEdit(route)}
-                      className="p-2 bg-zinc-950 border border-zinc-850 text-brand-accent rounded-xl hover:text-white hover:bg-brand-accent/10 transition-colors cursor-pointer"
-                      title="Editar Informações Completas"
-                    >
-                      <Edit size={16} />
-                    </button>
-                    <button 
-                      onClick={() => handleDeleteRoute(route.id, route.name)}
-                      className="p-2 bg-zinc-950 border border-zinc-850 text-rose-500 rounded-xl hover:bg-rose-500/10 transition-colors pointer-events-auto"
-                    >
-                      <Trash2 size={16} />
-                    </button>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-4 mb-4">
-                  <div className="bg-zinc-950/50 border border-zinc-800/50 rounded-2xl p-3">
-                    <p className="text-[8px] font-black text-zinc-600 uppercase tracking-widest mb-1 italic">Dias de Operação</p>
-                    <div className="flex flex-wrap gap-1">
-                      {[1, 2, 3, 4, 5, 6, 0].map(d => (
-                        <span key={d} className={cn(
-                          "w-5 h-5 rounded-md flex items-center justify-center text-[8px] font-black transition-all",
-                          route.daysOfWeek.includes(d) ? "bg-brand-accent text-zinc-950" : "bg-zinc-900 text-zinc-750 border border-zinc-850"
-                        )}>
-                          {getDayLabel(d).charAt(0)}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                  <div className="bg-zinc-950/50 border border-zinc-800/50 rounded-2xl p-3">
-                    <p className="text-[8px] font-black text-zinc-600 uppercase tracking-widest mb-1 italic">Horários</p>
-                    <div className="space-y-1">
-                      {(route.schedules || []).map((s, i) => (
-                        <div key={i} className="flex items-center gap-1.5 text-[10px] font-black text-white">
-                          <Clock size={10} className="text-brand-accent animate-pulse" />
-                          IDA: {s.departureTime || '--:--'} | VOLTA: {s.returnTime || '--:--'}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-
-                <div className="space-y-2.5">
-                  <div className="flex items-center justify-between p-3 bg-zinc-950 border border-zinc-850 rounded-2xl">
-                    <div className="flex items-center gap-2">
-                      <div className="w-8 h-8 rounded-lg bg-zinc-900 flex items-center justify-center text-brand-accent border border-zinc-800">
-                        <Users size={16} />
-                      </div>
-                      <div>
-                        <p className="text-[10px] font-black text-white uppercase tracking-tight">{route.passengerCount || 0} Passageiros</p>
-                        <p className="text-[8px] text-zinc-600 font-bold uppercase">Lista Fixa de Controle</p>
-                      </div>
-                    </div>
-                    <button 
-                      onClick={() => setViewingPassengersRoute(route)}
-                      className="text-[8px] font-black text-brand-accent uppercase tracking-widest hover:underline flex items-center gap-1 cursor-pointer"
-                    >
-                      <Smartphone size={10} />
-                      Ver Lista
-                    </button>
-                  </div>
-
-                  {/* Allocated Driver/Vehicle names rather than database IDs */}
-                  <div className="flex items-center justify-between p-3 bg-zinc-950 border border-zinc-850 rounded-2xl">
-                    <div className="flex items-center gap-2">
-                      <div className="w-8 h-8 rounded-lg bg-zinc-900 flex items-center justify-center text-brand-accent border border-zinc-800">
-                        <MapPin size={16} />
-                      </div>
-                      <div>
-                        <p className="text-[10px] font-black text-white uppercase tracking-tight">Recursos Alocados</p>
-                        <p className="text-[8px] text-zinc-500 font-black uppercase">
-                          V: {allocatedVehicle ? `${allocatedVehicle.plate.toUpperCase()} (${allocatedVehicle.model})` : 'NÃO FIXO'}
-                        </p>
-                        <p className="text-[8px] text-zinc-500 font-black uppercase">
-                          M: {allocatedDriver ? allocatedDriver.name.toUpperCase() : 'NÃO FIXO'}
-                        </p>
-                      </div>
-                    </div>
-                    {allocatedDriver || allocatedVehicle ? (
-                      <CheckCircle2 size={14} className="text-emerald-500" />
-                    ) : (
-                      <span className="text-[7px] font-bold text-zinc-650 tracking-widest uppercase">Pendente</span>
-                    )}
-                  </div>
-
-                  {/* Passenger and Whatsapp Contact directly list/card preview */}
-                  {(route.passengerName || route.passengerPhone) && (
-                    <div className="p-3 bg-zinc-950 border border-zinc-850 rounded-2xl flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <div className="w-8 h-8 rounded-lg bg-zinc-900 flex items-center justify-center text-emerald-500 border border-zinc-800">
-                          <Smartphone size={16} />
-                        </div>
-                        <div>
-                          <p className="text-[10px] font-black text-white uppercase tracking-tight">Passageiro de Contato</p>
-                          <p className="text-[8px] text-zinc-400 font-bold uppercase truncate max-w-[170px]">
-                            {route.passengerName ? route.passengerName.toUpperCase() : 'NÃO INFORMADO'}
-                          </p>
-                          {route.passengerPhone && (
-                            <p className="text-[8px] text-zinc-600 font-mono">{route.passengerPhone}</p>
-                          )}
-                        </div>
-                      </div>
-                      {route.passengerPhone && (
-                        <a 
-                          href={`https://wa.me/55${route.passengerPhone.replace(/\D/g, '')}`} 
-                          target="_blank" 
-                          rel="noopener noreferrer"
-                          className="px-2.5 py-1.5 bg-emerald-950/40 hover:bg-emerald-900 border border-emerald-900/40 text-emerald-400 hover:text-white rounded-xl transition-all text-[8px] font-black uppercase tracking-wider block"
-                          title="Iniciar conversa no WhatsApp"
-                        >
-                          ZAP
-                        </a>
-                      )}
-                    </div>
-                  )}
-
-                  {/* Google Maps Shortcut Action */}
-                  {route.locationUrl && (
-                    <div className="p-3 bg-zinc-950 border border-zinc-850 rounded-2xl flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <div className="w-8 h-8 rounded-lg bg-zinc-900 flex items-center justify-center text-brand-accent border border-zinc-800">
-                          <MapPin size={16} />
-                        </div>
-                        <div>
-                          <p className="text-[10px] font-black text-white uppercase tracking-tight">Rota Google Maps</p>
-                          <p className="text-[8px] text-zinc-550 font-bold uppercase">Localização Configurada</p>
-                        </div>
-                      </div>
-                      <a 
-                        href={route.locationUrl} 
-                        target="_blank" 
-                        rel="noopener noreferrer"
-                        className="px-2.5 py-1.5 bg-zinc-900 border border-zinc-800 text-brand-accent hover:border-brand-accent rounded-xl transition-all text-[8px] font-black uppercase tracking-wider block"
-                        title="Abrir GPS no Google Maps"
-                      >
-                        Navegar
-                      </a>
-                    </div>
-                  )}
-                </div>
-
-                {/* Iniciar Rota Button - Beautifully stateful */}
-                <button 
-                  onClick={() => handleToggleRunRoute(route)}
-                  className={cn(
-                    "w-full py-3.5 rounded-2xl font-black uppercase text-[10px] tracking-widest transition-all mt-4 flex items-center justify-center gap-2 cursor-pointer border shadow",
-                    route.runState === 'running'
-                      ? "bg-rose-950/40 text-rose-500 border-rose-900/60 hover:bg-rose-900/80 hover:text-white"
-                      : "bg-brand-accent text-zinc-950 border-brand-accent hover:bg-white"
-                  )}
-                >
-                  {route.runState === 'running' ? (
-                    <>
-                      <span className="w-2 h-2 rounded-full bg-rose-500 animate-ping" />
-                      CONCLUIR ROTA
-                    </>
-                  ) : (
-                    <>
-                      <Route size={14} className="animate-bounce" />
-                      INICIAR ROTA
-                    </>
-                  )}
-                </button>
-
-                {route.runState === 'running' && isFloatingNavDismissed && (
-                  <button 
-                    onClick={() => {
-                      setIsFloatingNavDismissed(false);
-                      toast.info("Painel de navegação reativado!");
-                    }}
-                    type="button"
-                    className="w-full py-2.5 bg-emerald-950/40 hover:bg-emerald-900/60 text-emerald-400 border border-emerald-900/40 rounded-2xl font-black uppercase text-[9px] tracking-widest transition-all mt-2.5 flex items-center justify-center gap-1.5 cursor-pointer"
-                  >
-                    <Smartphone size={11} className="animate-pulse" />
-                    REABRIR PAINEL DE NAVEGAÇÃO
-                  </button>
-                )}
-              </div>
-            </div>
-          );
-        })}
-
-        {/* Empty State / Add Route */}
-        <button 
-          onClick={() => setShowAddForm(true)}
-          className="bg-zinc-950/20 border-2 border-dashed border-zinc-800 rounded-[32px] flex flex-col items-center justify-center min-h-[350px] hover:border-brand-accent/50 hover:bg-zinc-900/40 transition-all group cursor-pointer"
-        >
-          <div className="w-16 h-16 rounded-full bg-zinc-900 border border-zinc-800 flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
-            <Plus size={32} className="text-zinc-500 group-hover:text-brand-accent" />
-          </div>
-          <p className="text-xs font-black text-zinc-500 uppercase tracking-widest group-hover:text-white">Cadastrar Novo Contrato</p>
-          <p className="text-[10px] text-zinc-750 font-bold uppercase mt-1 italic tracking-tight">Defina rotas, dias, contatos e recursos</p>
-        </button>
-      </div>
-
-      {/* Integration Tip */}
-      <div className="p-6 bg-brand-accent/5 border border-brand-accent/10 rounded-3xl flex items-start gap-4">
-        <div className="p-3 bg-brand-accent/10 rounded-2xl text-brand-accent">
-          <AlertCircle size={24} />
-        </div>
-        <div>
-          <h4 className="text-xs font-black text-brand-accent uppercase tracking-widest mb-1">Dica de Operação</h4>
-          <p className="text-[10px] text-zinc-550 font-bold leading-relaxed italic">
-            Para Fretados, recomendamos gerar mensalmente o PDF da Lista de Passageiros Fixa. 
-            Todas as viagens realizadas nestas rotas podem ser conciliadas no Financeiro via "Receita Recorrente - Contrato".
-          </p>
-        </div>
-      </div>
-
-      {/* Modal de Nova Rota */}
-      {showAddForm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-zinc-950/90 backdrop-blur-sm overflow-y-auto">
-          <div className="bg-zinc-900 border border-zinc-800 rounded-[32px] w-full max-w-2xl overflow-hidden shadow-2xl my-8">
-            <div className="p-8 border-b border-zinc-800 flex justify-between items-center bg-zinc-900/50">
-              <div>
-                <h3 className="text-xl font-black text-white uppercase tracking-tight">Cadastrar Fretamento</h3>
-                <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest mt-1">Configuração de Rota e Contrato</p>
-              </div>
-              <button 
-                onClick={() => setShowAddForm(false)}
-                className="p-2 hover:bg-zinc-805 rounded-xl transition-colors text-zinc-500"
-              >
-                <Plus className="rotate-45" size={24} />
-              </button>
-            </div>
-
-            <div className="p-8 max-h-[65vh] overflow-y-auto space-y-6">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest ml-1">Nome da Rota</label>
-                  <Input 
-                    placeholder="Ex: Turno Noturno - Fábrica X" 
-                    value={newRoute.name}
-                    onChange={(e) => setNewRoute({...newRoute, name: e.target.value})}
-                  />
-                </div>
-                <div className="space-y-2">
-                  <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest ml-1">Cliente / Empresa</label>
-                  <Input 
-                    placeholder="Nome do cliente/contratante" 
-                    value={newRoute.client}
-                    onChange={(e) => setNewRoute({...newRoute, client: e.target.value})}
-                  />
-                </div>
-              </div>
-
-              {/* Days of week */}
-              <div className="space-y-2">
-                <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest ml-1">Dias de Operação na Semana</label>
-                {renderDaysSelector(newRoute, setNewRoute)}
-              </div>
-
-              {/* Schedules Início e Término */}
-              <div className="space-y-2">
-                <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest ml-1">Horários de Operação</label>
-                {renderSchedulesSelector(newRoute, setNewRoute)}
-              </div>
-
-              {/* Driver and Vehicle selection */}
-              <div className="space-y-2">
-                <label className="text-[10px] font-black text-brand-accent uppercase tracking-widest ml-1">Escale operacional Fixa (Recursos)</label>
-                {renderResourceAllocationFields(newRoute, setNewRoute)}
-              </div>
-
-              {/* Location and Passenger Info Side-by-Side row */}
-              {renderLocationAndPassengerFields(newRoute, setNewRoute)}
-
-              {/* Seção de Passageiros (Até 30) */}
-              {renderPassengersSection(newRoute, setNewRoute)}
-
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest ml-1">Tipo de Serviço</label>
-                  <Select 
-                    value={newRoute.type}
-                    onChange={(e) => setNewRoute({...newRoute, type: e.target.value as any})}
-                  >
-                    <option value="factory">Industrial / Fábrica</option>
-                    <option value="school">Escolar / Universitário</option>
-                    <option value="other">Outros / Eventos</option>
-                  </Select>
-                </div>
-                <div className="space-y-2">
-                  <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest ml-1">Qtd. Passageiros (Sincronizado)</label>
-                  <Input 
-                    type="number" 
-                    placeholder="0" 
-                    disabled
-                    value={newRoute.passengers?.length || 0}
-                  />
-                </div>
-              </div>
-            </div>
-
-            <div className="p-8 bg-zinc-950/50 border-t border-zinc-800 flex justify-end gap-3">
-              <Button 
-                onClick={() => setShowAddForm(false)}
-                className="bg-transparent border border-zinc-800 text-zinc-500 hover:bg-zinc-800"
-              >
-                CANCELAR
-              </Button>
-              <Button 
-                onClick={handleAddRoute}
-                className="bg-brand-accent text-zinc-950 px-10 font-black"
-              >
-                SALVAR ROTA
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Modal de Edição de Rota */}
-      {showEditForm && editingRoute && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-zinc-950/90 backdrop-blur-sm overflow-y-auto">
-          <div className="bg-zinc-900 border border-zinc-800 rounded-[32px] w-full max-w-2xl overflow-hidden shadow-2xl my-8">
-            <div className="p-8 border-b border-zinc-800 flex justify-between items-center bg-zinc-900/50">
-              <div>
-                <h3 className="text-xl font-black text-white uppercase tracking-tight">Editar Fretamento</h3>
-                <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest mt-1">Atualização dos Parâmetros e Escalas</p>
-              </div>
-              <button 
-                onClick={() => {
-                  setShowEditForm(false);
-                  setEditingRoute(null);
-                }}
-                className="p-2 hover:bg-zinc-805 rounded-xl transition-colors text-zinc-500"
-              >
-                <Plus className="rotate-45" size={24} />
-              </button>
-            </div>
-
-            <div className="p-8 max-h-[65vh] overflow-y-auto space-y-6">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest ml-1">Nome da Rota</label>
-                  <Input 
-                    placeholder="Ex: Turno Noturno - Fábrica X" 
-                    value={editingRoute.name}
-                    onChange={(e) => setEditingRoute({...editingRoute, name: e.target.value})}
-                  />
-                </div>
-                <div className="space-y-2">
-                  <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest ml-1">Cliente / Empresa</label>
-                  <Input 
-                    placeholder="Nome do cliente/contratante" 
-                    value={editingRoute.client}
-                    onChange={(e) => setEditingRoute({...editingRoute, client: e.target.value})}
-                  />
-                </div>
-              </div>
-
-              {/* Days of week */}
-              <div className="space-y-2">
-                <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest ml-1">Dias de Operação na Semana</label>
-                {renderDaysSelector(editingRoute, setEditingRoute)}
-              </div>
-
-              {/* Schedules Início e Término */}
-              <div className="space-y-2">
-                <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest ml-1">Horários de Operação</label>
-                {renderSchedulesSelector(editingRoute, setEditingRoute)}
-              </div>
-
-              {/* Driver and Vehicle selection */}
-              <div className="space-y-2">
-                <label className="text-[10px] font-black text-brand-accent uppercase tracking-widest ml-1">Escale operacional Fixa (Recursos)</label>
-                {renderResourceAllocationFields(editingRoute, setEditingRoute)}
-              </div>
-
-              {/* Location and Passenger Info Side-by-Side row */}
-              {renderLocationAndPassengerFields(editingRoute, setEditingRoute)}
-
-              {/* Seção de Passageiros (Até 30) */}
-              {renderPassengersSection(editingRoute, setEditingRoute)}
-
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest ml-1">Tipo de Serviço</label>
-                  <Select 
-                    value={editingRoute.type}
-                    onChange={(e) => setEditingRoute({...editingRoute, type: e.target.value as any})}
-                  >
-                    <option value="factory">Industrial / Fábrica</option>
-                    <option value="school">Escolar / Universitário</option>
-                    <option value="other">Outros / Eventos</option>
-                  </Select>
-                </div>
-                <div className="space-y-2">
-                  <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest ml-1">Qtd. Passageiros (Sincronizado)</label>
-                  <Input 
-                    type="number" 
-                    placeholder="0" 
-                    disabled
-                    value={editingRoute.passengers?.length || 0}
-                  />
-                </div>
-              </div>
-            </div>
-
-            <div className="p-8 bg-zinc-950/50 border-t border-zinc-800 flex justify-end gap-3">
-              <Button 
-                onClick={() => {
-                  setShowEditForm(false);
-                  setEditingRoute(null);
-                }}
-                className="bg-transparent border border-zinc-800 text-zinc-500 hover:bg-zinc-800"
-              >
-                CANCELAR
-              </Button>
-              <Button 
-                onClick={handleUpdateRoute}
-                className="bg-brand-accent text-zinc-950 px-10 font-black"
-              >
-                SALVAR ALTERAÇÕES
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Modal de Detalhes dos Passageiros "Ver Lista" */}
-      {viewingPassengersRoute && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-zinc-950/90 backdrop-blur-sm overflow-y-auto">
-          <div className="bg-zinc-900 border border-zinc-800 rounded-[32px] w-full max-w-2xl overflow-hidden shadow-2xl my-8">
-            <div className="p-8 border-b border-zinc-800 flex justify-between items-center bg-zinc-900/50">
-              <div>
-                <h3 className="text-xl font-black text-white uppercase tracking-tight">Lista de Passageiros</h3>
-                <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest mt-1">
-                  Rota: {viewingPassengersRoute.name.toUpperCase()} ({viewingPassengersRoute.client.toUpperCase()})
-                </p>
-              </div>
-              <button 
-                onClick={() => setViewingPassengersRoute(null)}
-                className="p-2 hover:bg-zinc-850 rounded-xl transition-colors text-zinc-500"
-              >
-                <Plus className="rotate-45" size={24} />
-              </button>
-            </div>
-
-            <div className="p-8 max-h-[60vh] overflow-y-auto space-y-4">
-              <div className="flex items-center justify-between p-4 bg-zinc-950 border border-zinc-850 rounded-2xl">
-                <div className="flex items-center gap-2">
-                  <Users className="text-brand-accent h-5 w-5" />
-                  <div>
-                    <p className="text-xs font-black text-white uppercase">Lista Fixa Informativa</p>
-                    <p className="text-[9px] text-zinc-500 font-bold uppercase">{viewingPassengersRoute.passengers?.length || 0} de 30 Passageiros Ativos</p>
-                  </div>
-                </div>
-                {viewingPassengersRoute.runState === 'running' ? (
-                  <span className="px-3 py-1 bg-rose-500/10 text-rose-500 border border-rose-500/20 rounded-full text-[8px] font-black uppercase tracking-widest animate-pulse">
-                    EM CURSO ATIVO
-                  </span>
-                ) : (
-                  <span className="px-3 py-1 bg-zinc-800 text-zinc-500 border border-zinc-700 rounded-full text-[8px] font-black uppercase tracking-widest">
-                    EM ESPERA / LATENTE
-                  </span>
-                )}
-              </div>
-
-              <div className="space-y-3">
-                {!viewingPassengersRoute.passengers || viewingPassengersRoute.passengers.length === 0 ? (
-                  <div className="text-center py-12 text-zinc-650 text-[10px] font-bold uppercase italic bg-zinc-950 rounded-2xl border border-zinc-850">
-                    Nenhum passageiro individual cadastrado nesta rota. Utilize "Editar" para cadastrar passageiros.
-                  </div>
-                ) : (
-                  viewingPassengersRoute.passengers.map((passenger, idx) => (
-                    <div key={idx} className="p-4 bg-zinc-950 border border-zinc-850 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                      <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 rounded-full bg-zinc-900 border border-zinc-800 flex items-center justify-center font-black text-xs text-brand-accent">
-                          {(idx + 1).toString().padStart(2, '0')}
-                        </div>
-                        <div>
-                          <p className="text-xs font-black text-white uppercase">{passenger.name || 'Sem Nome'}</p>
-                          <div className="flex items-center gap-2 mt-0.5">
-                            {passenger.boardingTime && (
-                              <p className="text-[9px] font-mono text-brand-accent font-black bg-brand-accent/10 px-1.5 py-0.5 rounded">
-                                {passenger.boardingTime}
-                              </p>
-                            )}
-                            {passenger.phone && (
-                              <p className="text-[9px] font-mono text-zinc-500">{passenger.phone}</p>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="flex gap-2 self-end sm:self-auto">
-                        {passenger.phone && (
-                          <a 
-                            href={`https://api.whatsapp.com/send?phone=55${passenger.phone.replace(/\D/g, '')}&text=${encodeURIComponent(`Olá ${passenger.name}, DM Turismo informa: seu embarque da rota ${viewingPassengersRoute.name} está confirmado.`)}`} 
-                            target="_blank" 
-                            rel="noopener noreferrer"
-                            className="px-3 py-2 bg-emerald-950/40 hover:bg-emerald-900 border border-emerald-900/40 text-emerald-400 hover:text-white rounded-xl transition-all text-[9.5px] font-black uppercase tracking-wider flex items-center gap-1"
-                          >
-                            WhatsApp
-                          </a>
-                        )}
-                        {passenger.locationUrl && (
-                          <a 
-                            href={passenger.locationUrl} 
-                            target="_blank" 
-                            rel="noopener noreferrer"
-                            className="px-3 py-2 bg-zinc-900 border border-zinc-805 text-brand-accent hover:border-brand-accent rounded-xl transition-all text-[9.5px] font-black uppercase tracking-wider flex items-center gap-1"
-                          >
-                            Local Embarque
-                          </a>
-                        )}
-                      </div>
-                    </div>
-                  ))
-                )}
-              </div>
-            </div>
-
-            <div className="p-8 bg-zinc-950/50 border-t border-zinc-800 flex justify-end">
-              <Button 
-                onClick={() => setViewingPassengersRoute(null)}
-                className="bg-brand-accent text-zinc-950 px-8 font-black"
-              >
-                FECHAR LISTA
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Floating Active Route Navigation Box */}
-      {(() => {
-        const runningRoute = routes.find(r => r.runState === 'running');
-        if (!runningRoute || isFloatingNavDismissed) return null;
-
-        const navPassengers = (runningRoute.passengers || []).slice(0, 20);
-        const activeIndex = navIndexes[runningRoute.id] || 0;
-        const currentNavPassenger = navPassengers[activeIndex];
-
-        return (
-          <div className="fixed bottom-6 right-6 z-50 max-w-sm w-[92vw] sm:w-[380px] bg-zinc-950/95 border border-brand-accent/40 rounded-3xl p-5 shadow-[0_20px_50px_rgba(0,0,0,0.8)] backdrop-blur-md text-white animate-in slide-in-from-bottom-5 duration-300">
-            <div className="flex items-center justify-between border-b border-zinc-900 pb-3 mb-4">
-              <div className="flex items-center gap-2">
-                <span className="flex h-2.5 w-2.5 relative border border-brand-accent/30 rounded-full">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-brand-accent opacity-75"></span>
-                  <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-brand-accent"></span>
+      {/* Tab Contents Orchestrator */}
+      <AnimatePresence mode="wait">
+        {activeTab === 'routes' ? (
+          <motion.div
+            key="routes-tab"
+            initial={{ opacity: 0, y: 15 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -15 }}
+            className="grid grid-cols-1 lg:grid-cols-12 gap-8"
+          >
+            {/* Left Main list panel card */}
+            <div className="lg:col-span-8 space-y-4">
+              <div className="flex flex-col md:flex-row gap-4 items-stretch md:items-center justify-between">
+                <span className="text-[10px] font-black text-zinc-500 uppercase tracking-widest font-sans">
+                  Escalas e Itinerários Recorrentes ({listedRoutes.length})
                 </span>
-                <span className="text-[9px] font-black text-brand-accent tracking-widest uppercase">ROTA EM CURSO ATIVA</span>
+                
+                <div className="relative w-full md:w-72">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500">
+                    <Search size={14} />
+                  </span>
+                  <input
+                    type="text"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder="Pesquisar rota ou cliente..."
+                    className="w-full bg-zinc-950 border border-zinc-900 rounded-2xl py-2 pl-9 pr-4 text-xs text-white outline-none focus:border-brand-accent"
+                  />
+                </div>
               </div>
-              <button 
-                onClick={() => handleToggleRunRoute(runningRoute)}
-                className="text-[8px] font-black px-2.5 py-1 bg-rose-500/10 text-rose-500 border border-rose-500/20 rounded-lg hover:bg-rose-500 hover:text-white transition-all uppercase tracking-wider cursor-pointer"
-              >
-                FINALIZAR ROTA
-              </button>
-            </div>
 
-            <div className="space-y-4">
-              <div>
-                <h4 className="text-xs font-black text-white uppercase tracking-tight truncate">{runningRoute.name}</h4>
-                <p className="text-[10px] text-zinc-500 font-bold uppercase">{runningRoute.client}</p>
-              </div>
-
-              {/* Rota Resumida (Itinerário com nomes/pontos e horários) */}
-              {navPassengers.length > 0 ? (
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between">
-                    <span className="text-[8px] text-zinc-500 font-black uppercase tracking-wider">Rota Resumida (Selecione a parada)</span>
-                    <span className="text-[9px] text-brand-accent font-mono font-black">{activeIndex + 1} / {navPassengers.length}</span>
-                  </div>
-                  <div className="flex flex-col gap-1.5 bg-zinc-900/50 p-2.5 rounded-2xl border border-zinc-850/60 max-h-[140px] overflow-y-auto custom-scrollbar">
-                    {navPassengers.map((passenger, idx) => (
-                      <div
-                        key={idx}
-                        onClick={() => {
-                          setNavIndexes(prev => {
-                            const updated = { ...prev, [runningRoute.id]: idx };
-                            localStorage.setItem('active_route_nav_' + runningRoute.id, String(idx));
-                            return updated;
-                          });
-                          const mapsUrl = getMapsDirUrl(
-                            passenger.locationUrl, 
-                            passenger.name ? `${passenger.name} ${runningRoute.client}` : `${runningRoute.name} ${runningRoute.client}`
-                          );
-                          if (mapsUrl) {
-                            window.open(mapsUrl, '_blank');
-                          }
-                          toast.info(`Selecionada parada ${idx + 1}: ${passenger.name || 'Sem nome'}`);
-                        }}
-                        className={cn(
-                          "flex items-center justify-between p-2 rounded-xl border text-[10px] cursor-pointer transition-all select-none hover:bg-zinc-850",
-                          idx === activeIndex
-                            ? "bg-brand-accent/10 border-brand-accent/50 text-white font-black"
-                            : idx < activeIndex
-                              ? "bg-emerald-950/20 border-zinc-900/40 text-emerald-400 font-medium"
-                              : "bg-zinc-950/40 border-zinc-900/30 text-zinc-400"
-                        )}
-                      >
-                        <div className="flex items-center gap-2 min-w-0 flex-1">
-                          <span className={cn(
-                            "w-5 h-5 flex items-center justify-center rounded-lg text-[9px] font-mono font-black shrink-0 border",
-                            idx === activeIndex
-                              ? "bg-brand-accent text-zinc-950 border-brand-accent"
-                              : idx < activeIndex
-                                ? "bg-emerald-950/50 text-emerald-400 border-emerald-950"
-                                : "bg-zinc-900 text-zinc-550 border-zinc-800"
-                          )}>
-                            {(idx + 1).toString().padStart(2, '0')}
-                          </span>
-                          <span className="truncate uppercase font-bold tracking-tight text-[10px]">
-                            {passenger.name || `Ponto / Parada ${idx + 1}`}
-                          </span>
-                        </div>
-                        {passenger.boardingTime ? (
-                          <div className={cn(
-                            "flex items-center gap-1 text-[9px] font-mono shrink-0 px-2 py-0.5 rounded-md ml-2 border",
-                            idx === activeIndex
-                              ? "bg-brand-accent/20 text-brand-accent border-brand-accent/30 font-black animate-pulse"
-                              : idx < activeIndex
-                                ? "bg-emerald-950/25 text-emerald-400 border-emerald-950"
-                                : "bg-zinc-900 text-zinc-550 border-zinc-800"
-                          )}>
-                            <Clock size={8} />
-                            {passenger.boardingTime}
-                          </div>
-                        ) : (
-                          <span className="text-[8px] text-zinc-650 italic lowercase pr-1">sem hora</span>
-                        )}
-                      </div>
-                    ))}
-                  </div>
+              {listedRoutes.length === 0 ? (
+                <div className="bg-zinc-950 p-12 text-center rounded-[32px] border border-dashed border-zinc-900 text-zinc-500 font-bold uppercase text-[10px] space-y-2">
+                  <AlertCircle size={32} className="text-zinc-800 mx-auto" />
+                  <p>Nenhuma rota encontrada.</p>
                 </div>
               ) : (
-                <div className="py-3 bg-zinc-900/40 text-[9px] font-bold uppercase text-zinc-600 italic text-center rounded-2xl border border-zinc-850">
-                  Nenhum passageiro individual cadastrado para o tour.
+                <div className="space-y-4">
+                  {listedRoutes.map((route) => {
+                    const matchedDriver = employees.find(e => e.id === route.fixedDriverId);
+                    const matchedVehicle = vehicles.find(v => v.id === route.fixedVehicleId);
+                    const runIdx = navIndexes[route.id] || 0;
+                    const totPsgs = (route.passengers || []).length;
+                    
+                    return (
+                      <div
+                        key={route.id}
+                        className={cn(
+                          "bg-zinc-950 p-5 rounded-[28px] border transition-all hover:border-zinc-800 relative group overflow-hidden shadow-sm",
+                          route.runState === 'running' 
+                            ? "border-rose-500/40 shadow-[0_4px_25px_rgba(239,68,68,0.1)]" 
+                            : "border-zinc-900"
+                        )}
+                      >
+                        {/* Interactive glow border and LED indicator */}
+                        {route.runState === 'running' && (
+                          <span className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-rose-500 via-pink-600 to-amber-500 animate-pulse" />
+                        )}
+
+                        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                          <div className="flex items-start gap-3.5">
+                            <div className={cn(
+                              "w-10 h-10 rounded-2xl flex items-center justify-center shrink-0 border transition-all",
+                              route.runState === 'running'
+                                ? "bg-rose-950/45 text-rose-500 border-rose-500/25 animate-pulse"
+                                : "bg-zinc-900 text-zinc-500 border-zinc-850"
+                            )}>
+                              {route.runState === 'running' ? <Compass size={20} className="animate-spin-slow" /> : <Route size={20} />}
+                            </div>
+
+                            <div>
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="text-[10px] font-black text-zinc-500 uppercase tracking-widest">{route.client}</span>
+                                <span className="text-zinc-800">•</span>
+                                <span className={cn(
+                                  "text-[7px] font-black uppercase px-2 py-0.5 rounded border tracking-wider",
+                                  route.type === 'factory' 
+                                    ? "bg-amber-500/5 text-amber-500 border-amber-500/10" 
+                                    : "bg-indigo-500/5 text-indigo-500 border-indigo-500/10"
+                                )}>
+                                  {route.type === 'factory' ? 'Fábrica' : route.type === 'school' ? 'Escolar' : 'Avulso/Outro'}
+                                </span>
+                              </div>
+                              <h3 className="text-sm font-black text-white uppercase tracking-tight mt-1 truncate max-w-[200px] md:max-w-none">
+                                {route.name}
+                              </h3>
+                              <p className="text-[8px] font-bold text-zinc-650 uppercase tracking-widest mt-1">
+                                {matchedDriver ? `Mot. Fixo: ${matchedDriver.name.toUpperCase().split(' ')[0]}` : 'Nenhum motorista fixado'} 
+                                {matchedVehicle ? ` • Placa: ${matchedVehicle.plate.toUpperCase()}` : ''}
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-2 w-full md:w-auto justify-end border-t border-zinc-900 md:border-0 pt-3 md:pt-0">
+                            {/* Run route control handler */}
+                            <button
+                              onClick={() => handleToggleRunRoute(route)}
+                              className={cn(
+                                "px-3.5 py-2.0 rounded-xl text-[8px] font-black uppercase tracking-widest flex items-center gap-1 cursor-pointer transition-all active:scale-95",
+                                route.runState === 'running'
+                                  ? "bg-rose-600 hover:bg-rose-500 text-white shadow-lg shadow-rose-900/10"
+                                  : "bg-zinc-900 text-[#ff6b00] border border-zinc-850 hover:bg-brand-accent hover:text-zinc-950 hover:border-brand-accent font-sans"
+                              )}
+                            >
+                              {route.runState === 'running' ? (
+                                <><span className="w-1.5 h-1.5 rounded-full bg-white animate-ping shrink-0" /> Monitorar Rota</>
+                              ) : (
+                                <><Play size={9} /> Iniciar Rota GPS</>
+                              )}
+                            </button>
+
+                            {/* Options popup bar or details drawer */}
+                            <button
+                              onClick={() => exportRouteToOfflineHtml(route)}
+                              className="p-2 bg-zinc-900 hover:bg-zinc-850 text-emerald-500 rounded-xl border border-zinc-850 cursor-pointer"
+                              title="Exportar HTML Navegador Offline"
+                            >
+                              <Smartphone size={14} />
+                            </button>
+                            <button
+                              onClick={() => exportRouteToGpx(route)}
+                              className="p-2 bg-zinc-900 hover:bg-zinc-850 text-indigo-400 rounded-xl border border-zinc-850 cursor-pointer"
+                              title="Exportar Itinerário GPX (Offilne Maps)"
+                            >
+                              <MapPin size={14} />
+                            </button>
+                            <button
+                              onClick={() => exportRouteToPdf(route)}
+                              className="p-2 bg-zinc-900 hover:bg-zinc-850 text-zinc-400 rounded-xl border border-zinc-850 cursor-pointer"
+                              title="Gerar PDF Imprimir"
+                            >
+                              <Printer size={14} />
+                            </button>
+                            <button
+                              onClick={() => {
+                                setEditingRoute(route);
+                                setShowEditForm(true);
+                              }}
+                              className="p-2 bg-zinc-900 hover:bg-zinc-850 text-amber-500 rounded-xl border border-zinc-850 cursor-pointer"
+                              title="Editar Fretamento"
+                            >
+                              <Edit size={14} />
+                            </button>
+                            <button
+                              onClick={() => handleDeleteRoutePrompt(route.id, route.name)}
+                              className="p-2 bg-zinc-900 hover:bg-rose-950/20 text-rose-500 rounded-xl border border-zinc-850 cursor-pointer"
+                              title="Excluir"
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Collapsing schedules details strip block */}
+                        {route.schedules && route.schedules.length > 0 && route.daysOfWeek && (
+                          <div className="mt-4 pt-3.5 border-t border-zinc-900 flex justify-between items-center text-[8px] font-bold text-zinc-650 uppercase tracking-widest flex-wrap gap-2">
+                            <div className="flex items-center gap-1 text-zinc-500">
+                              <Clock size={11} className="text-zinc-700" />
+                              <span>Horários: {route.schedules.map(sc => `${sc.departureTime} -> ${sc.returnTime}`).join(' | ')}</span>
+                            </div>
+                            <div className="flex gap-0.5">
+                              {['D', 'S', 'T', 'Q', 'Q', 'S', 'S'].map((dayChar, i) => {
+                                const isAct = route.daysOfWeek.includes(i);
+                                return (
+                                  <span
+                                    key={i}
+                                    className={cn(
+                                      "w-4 h-4 rounded-md flex items-center justify-center text-[7px] font-black border",
+                                      isAct 
+                                        ? "bg-[#ff6b00]/10 text-[#ff6b00] border-[#ff6b00]/20 font-sans" 
+                                        : "bg-zinc-900/40 text-zinc-700 border-zinc-900/40"
+                                    )}
+                                  >
+                                    {dayChar}
+                                  </span>
+                                );
+                              })}
+                            </div>
+                            <div className="flex items-center gap-1.5 text-zinc-500">
+                              <Users size={11} className="text-zinc-700" />
+                              <span>Passageiros: <span className="font-extrabold text-white">{totPsgs} cadastrados</span></span>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               )}
+            </div>
 
-              {/* Passageiro Atual Detalhado */}
-              {currentNavPassenger ? (
-                <div className="p-4 bg-zinc-900 border border-zinc-850 rounded-2xl space-y-3">
-                  <div className="flex justify-between items-start gap-2">
-                    <div className="min-w-0 flex-1">
-                      <p className="text-[8px] font-black text-zinc-500 uppercase tracking-widest leading-none mb-1">Próximo Passageiro de Embarque</p>
-                      <div className="text-xs font-black text-white uppercase truncate">
-                        {currentNavPassenger.name || 'Sem Nome Cadastrado'}
-                      </div>
-                      {currentNavPassenger.boardingTime && (
-                        <div className="flex items-center gap-1 text-[9px] font-bold text-brand-accent mt-1 uppercase">
-                          <Clock size={10} />
-                          Passagem Prevista: {currentNavPassenger.boardingTime}
-                        </div>
-                      )}
-                      {currentNavPassenger.phone && (
-                        <p className="text-[9px] font-mono text-zinc-500 mt-1">{currentNavPassenger.phone}</p>
-                      )}
+            {/* Right Quick Add Panel Card */}
+            <div className="lg:col-span-4">
+              <div className="bg-zinc-950 p-6 border border-zinc-900 rounded-[32px] space-y-4 shadow-sm sticky top-6">
+                <div>
+                  <h3 className="text-sm font-black text-white uppercase tracking-tight">Vincular Atribuição Rápida</h3>
+                  <p className="text-[8px] font-bold text-zinc-650 uppercase tracking-wider mt-0.5">Adicionar um fretamento industrial imediato para a escala</p>
+                </div>
+
+                <div className="space-y-3 pt-2">
+                  <div className="space-y-1">
+                    <label className="text-[7px] font-black text-zinc-500 uppercase tracking-widest block ml-1">Nome da Escala</label>
+                    <input
+                      type="text"
+                      placeholder="Ex: Turno Noturno 22h"
+                      value={quickRoute.name}
+                      onChange={(e) => setQuickRoute({...quickRoute, name: e.target.value})}
+                      className="w-full bg-zinc-900 border border-zinc-850 rounded-xl py-2 px-3 text-xs text-white outline-none focus:border-brand-accent"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[7px] font-black text-zinc-500 uppercase tracking-widest block ml-1">Cliente / Empresa</label>
+                    <input
+                      type="text"
+                      placeholder="Ex: Aurora Alimentos"
+                      value={quickRoute.client}
+                      onChange={(e) => setQuickRoute({...quickRoute, client: e.target.value})}
+                      className="w-full bg-zinc-900 border border-zinc-850 rounded-xl py-2 px-3 text-xs text-white outline-none focus:border-brand-accent"
+                    />
+                  </div>
+                  
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="space-y-1">
+                      <label className="text-[7px] font-black text-zinc-500 uppercase tracking-widest block ml-1">Saída</label>
+                      <input
+                        type="time"
+                        value={quickRoute.departureTime}
+                        onChange={(e) => setQuickRoute({...quickRoute, departureTime: e.target.value})}
+                        className="w-full bg-zinc-900 border border-zinc-850 rounded-xl py-2 px-3 text-xs text-white outline-none focus:border-brand-accent"
+                      />
                     </div>
-                    <span className="w-5 h-5 rounded-full bg-brand-accent/10 border border-brand-accent/20 flex items-center justify-center text-brand-accent font-black text-[9px] shrink-0 select-none">
-                      {activeIndex + 1}
-                    </span>
+                    <div className="space-y-1">
+                      <label className="text-[7px] font-black text-zinc-500 uppercase tracking-widest block ml-1">Retorno</label>
+                      <input
+                        type="time"
+                        value={quickRoute.returnTime}
+                        onChange={(e) => setQuickRoute({...quickRoute, returnTime: e.target.value})}
+                        className="w-full bg-zinc-900 border border-zinc-850 rounded-xl py-2 px-3 text-xs text-white outline-none focus:border-brand-accent"
+                      />
+                    </div>
                   </div>
 
-                  <div className="flex gap-2 pt-2 border-t border-zinc-850/50">
-                    {currentNavPassenger.phone && (
+                  <div className="space-y-1">
+                    <label className="text-[7px] font-black text-[#ff6b00] uppercase tracking-widest block ml-1">Selecionar frota fixa</label>
+                    <select
+                      value={quickRoute.fixedVehicleId}
+                      onChange={(e) => setQuickRoute({...quickRoute, fixedVehicleId: e.target.value})}
+                      className="w-full bg-zinc-900 border border-zinc-850 rounded-xl py-2 px-3 text-xs text-white outline-none focus:border-brand-accent"
+                    >
+                      <option value="">A DEFINIR DO PÁTIO</option>
+                      {vehicles.map(v => (
+                        <option key={v.id} value={v.id}>{v.plate.toUpperCase()} - {v.model?.toUpperCase()}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-[7px] font-black text-zinc-500 uppercase tracking-widest block ml-1">Motorista</label>
+                    <select
+                      value={quickRoute.fixedDriverId}
+                      onChange={(e) => setQuickRoute({...quickRoute, fixedDriverId: e.target.value})}
+                      className="w-full bg-zinc-900 border border-[#27272a] rounded-xl py-2 px-3 text-xs text-white outline-none focus:border-brand-accent"
+                    >
+                      <option value="">A DEFINIR DA ESCALA</option>
+                      {employees.filter(e => e.role === 'Motorista' || e.role === 'admin' || e.role === 'Operacional').map(e => (
+                        <option key={e.id} value={e.id}>{e.name.toUpperCase()}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <button
+                    onClick={handleLaunchQuickRouteSubmit}
+                    className="w-full py-2.5 bg-[#ff6b00]/10 hover:bg-[#ff6b00] text-[#ff6b00] hover:text-zinc-950 font-black border border-[#ff6b00]/25 rounded-2xl text-[10px] uppercase tracking-widest transition-all cursor-pointer"
+                  >
+                    Vincular Rápido
+                  </button>
+                </div>
+              </div>
+
+              {/* Offline Route Manager Subpanel */}
+              <div className="mt-6">
+                <CharterOfflineManager />
+              </div>
+            </div>
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
+
+      <motion.div
+        key="client-charters-tab"
+        initial={{ opacity: 0, y: 15 }}
+        animate={{ opacity: 1, y: 0 }}
+        exit={{ opacity: 0, y: -15 }}
+        className="space-y-6"
+      >
+            {/* Period metrics / statistics widgets panel */}
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+              <div className="bg-zinc-950 p-5 rounded-3xl border border-zinc-900">
+                <span className="text-[8px] font-black text-zinc-500 uppercase tracking-widest">Total Viagens Realizadas</span>
+                <h4 className="text-2xl font-black text-white mt-1">{periodStats.totalCount}</h4>
+                <p className="text-[8px] font-bold text-zinc-650 uppercase tracking-wider mt-1">Nesta competência</p>
+              </div>
+              <div className="bg-zinc-950 p-5 rounded-3xl border border-zinc-900">
+                <span className="text-[8px] font-black text-zinc-500 uppercase tracking-widest text-[#ff6b00]">Clientes Ativos</span>
+                <h4 className="text-2xl font-black text-[#ff6b00] mt-1">{clients.length}</h4>
+                <p className="text-[8px] font-bold text-zinc-650 uppercase tracking-wider mt-1">Fretamentos contratados</p>
+              </div>
+              <div className="bg-zinc-950 p-5 rounded-3xl border border-zinc-900">
+                <span className="text-[8px] font-black text-zinc-500 uppercase tracking-widest text-emerald-500">Rotas Recorrentes</span>
+                <h4 className="text-2xl font-black text-emerald-500 mt-1">{routes.length}</h4>
+                <p className="text-[8px] font-bold text-emerald-700 uppercase tracking-wider mt-1">Escalas de linha contínua</p>
+              </div>
+              <div className="bg-zinc-950 p-5 rounded-3xl border border-zinc-900">
+                <span className="text-[8px] font-black text-zinc-500 uppercase tracking-widest text-amber-500">Viagens Extras</span>
+                <h4 className="text-2xl font-black text-amber-500 mt-1">{clientCharters.filter(t => t.isExtra && t.status !== 'cancelled').length}</h4>
+                <p className="text-[8px] font-bold text-amber-700 uppercase tracking-wider mt-1">Viagens avulsas no mês</p>
+              </div>
+            </div>
+
+            {/* Split layout: Selector List and details card view */}
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+              {/* Left Column Selector */}
+              <div className="lg:col-span-4 space-y-4">
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500">
+                    <Search size={14} />
+                  </span>
+                  <input
+                    type="text"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder={selectedClientDetail === null ? "Buscar viagens/rotas..." : "Buscar nos clientes..."}
+                    className="w-full bg-zinc-950 border border-zinc-900 rounded-2xl py-2 pl-9 pr-4 text-xs text-white outline-none focus:border-brand-accent placeholder-zinc-650"
+                  />
+                </div>
+
+                <div className="bg-zinc-950 p-5 rounded-[28px] border border-zinc-900 space-y-3">
+                  <div className="flex justify-between items-center mb-1">
+                    <span className="text-[9px] font-black text-zinc-500 uppercase tracking-widest block font-sans">
+                      Clientes ({clients.length})
+                    </span>
+                  </div>
+                  <div className="space-y-2 max-h-[350px] overflow-y-auto pr-1">
+                    {filteredClients.map(cl => {
+                      const isActive = selectedClientDetail?.id === cl.id;
+                      const count = tripCountsByClient[cl.id] || 0;
+                      return (
+                        <div
+                          key={cl.id}
+                          onClick={() => setSelectedClientDetail(cl)}
+                          className={cn(
+                            "p-3 border rounded-2xl transition-all cursor-pointer flex items-center justify-between group",
+                            isActive 
+                              ? "bg-brand-accent/5 border-brand-accent/40" 
+                              : "bg-zinc-900/30 border-zinc-900/60 hover:border-zinc-800"
+                          )}
+                        >
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            <div className="w-7 h-7 rounded-xl bg-zinc-950 border border-zinc-850 flex items-center justify-center text-zinc-500 shrink-0">
+                              <Building2 size={14} />
+                            </div>
+                            <div className="min-w-0">
+                              <h4 className="text-[11px] font-black text-white uppercase truncate group-hover:text-brand-accent transition-colors">
+                                {cl.name}
+                              </h4>
+                              <p className="text-[7px] font-bold text-zinc-500 uppercase tracking-wider mt-0.5 truncate">
+                                CNPJ: {cl.document || 'NÃO LANÇADO'}
+                              </p>
+                            </div>
+                          </div>
+                          
+                          <span className="text-[7px] font-black uppercase text-zinc-400 bg-zinc-950 border border-zinc-850 px-1.5 py-0.5 rounded shrink-0">
+                            {count} saídas
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div className="bg-zinc-950 p-5 rounded-[28px] border border-zinc-900 space-y-3">
+                  <div className="flex justify-between items-center mb-1">
+                    <span className="text-[8px] font-black text-zinc-500 uppercase tracking-widest block">Período de Escala</span>
+                    {selectedClientDetail && (
                       <button
-                        onClick={() => {
-                          const cleanPhone = currentNavPassenger.phone!.replace(/\D/g, '');
-                          if (cleanPhone) {
-                            const msg = encodeURIComponent(`Olá ${currentNavPassenger.name}, o seu transporte DM Turismo começou a rota e está a caminho da sua localização de embarque!`);
-                            window.open(`https://api.whatsapp.com/send?phone=55${cleanPhone}&text=${msg}`, '_blank');
-                          }
-                        }}
-                        className="flex-1 py-2 bg-emerald-950/40 hover:bg-emerald-900 border border-emerald-900/40 text-emerald-400 hover:text-white rounded-xl transition-all text-[9px] font-black uppercase tracking-wider flex items-center justify-center gap-1 cursor-pointer shadow-sm"
+                        onClick={() => setSelectedClientDetail(null)}
+                        className="text-[8px] font-black text-[#ff6b00] hover:text-white uppercase tracking-widest cursor-pointer"
                       >
-                        <Smartphone size={10} />
-                        WHATSAPP
+                        Ver Geral
                       </button>
                     )}
-                    
-                    <button
-                      onClick={() => {
-                        const mapsUrl = getMapsDirUrl(
-                          currentNavPassenger.locationUrl, 
-                          currentNavPassenger.name ? `${currentNavPassenger.name} ${runningRoute.client}` : `${runningRoute.name} ${runningRoute.client}`
-                        );
-                        if (mapsUrl) {
-                          window.open(mapsUrl, '_blank');
-                        } else {
-                          window.open(`https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(currentNavPassenger.name + ' ' + runningRoute.client)}`, '_blank');
-                        }
-                      }}
-                      className="flex-1 py-2 bg-zinc-900 hover:bg-zinc-850 border border-zinc-805 text-brand-accent hover:text-white rounded-xl transition-all text-[9px] font-black uppercase tracking-wider flex items-center justify-center gap-1 cursor-pointer shadow-sm"
-                    >
-                      <MapPin size={10} />
-                      ABRIR GPS
-                    </button>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-1.5">
+                      <label className="text-[7px] font-black text-zinc-500 uppercase block">Início</label>
+                      <input
+                        type="date"
+                        value={clientStartDate}
+                        onChange={(e) => setClientStartDate(e.target.value)}
+                        className="w-full bg-zinc-900 border border-zinc-800 rounded-lg p-2 text-[10px] text-white outline-none focus:border-brand-accent cursor-pointer"
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-[7px] font-black text-zinc-500 uppercase block">Fim</label>
+                      <input
+                        type="date"
+                        value={clientEndDate}
+                        onChange={(e) => setClientEndDate(e.target.value)}
+                        className="w-full bg-zinc-900 border border-zinc-800 rounded-lg p-2 text-[10px] text-white outline-none focus:border-brand-accent cursor-pointer"
+                      />
+                    </div>
                   </div>
                 </div>
-              ) : (
-                <div className="p-4 bg-zinc-900 border border-zinc-850 rounded-2xl text-[9px] text-zinc-500 italic font-bold uppercase text-center leading-relaxed">
-                  Sem informações adicionais. Toque abaixo para abrir o mapa geral da rota:
-                  {runningRoute.locationUrl && (
-                    <button 
-                      onClick={() => window.open(getMapsDirUrl(runningRoute.locationUrl, runningRoute.name), '_blank')}
-                      className="mt-2 text-brand-accent hover:underline block mx-auto font-black cursor-pointer"
-                    >
-                      ABRIR MAPS GERAL
-                    </button>
-                  )}
-                </div>
-              )}
+              </div>
 
-              {/* Controles de Sequenciador */}
-              <div className="space-y-2">
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => handleGoToPrevPassenger(runningRoute)}
-                    disabled={activeIndex === 0}
-                    type="button"
-                    className={cn(
-                      "px-4.5 py-2.5 border rounded-xl text-[9px] font-black uppercase tracking-wider transition-all flex items-center justify-center gap-1",
-                      activeIndex === 0
-                        ? "bg-zinc-900/30 border-zinc-900 text-zinc-700 cursor-not-allowed select-none"
-                        : "bg-zinc-900 border-zinc-800 text-zinc-400 hover:text-white hover:border-zinc-700 cursor-pointer"
-                    )}
-                  >
-                    ANTERIOR
-                  </button>
-                  
-                  <button
-                    onClick={() => handleGoToNextPassenger(runningRoute, navPassengers.length)}
-                    type="button"
-                    className="flex-1 py-2.5 bg-brand-accent text-zinc-950 hover:bg-white rounded-xl text-[9.5px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-lg hover:shadow-brand-accent/25 active:scale-95"
-                  >
-                    {activeIndex >= navPassengers.length - 1 ? "CONCLUIR ROTA" : "PRÓXIMA PARADA"}
-                  </button>
-                </div>
+              {/* Right Column details layout */}
+              <div className="lg:col-span-8 flex flex-col h-full space-y-6">
+                {selectedClientDetail === null ? (
+                  <>
+                    {/* Fichas dos Clientes (Dossiês Cadastrados) */}
+                    <div className="bg-zinc-950 border border-zinc-900 rounded-[32px] p-6 space-y-4 shadow-sm">
+                      <div className="flex justify-between items-center pb-3 border-b border-zinc-900">
+                        <div>
+                          <span className="text-[10px] font-black text-white uppercase tracking-widest font-sans">
+                            Fichas e Dossiês dos Clientes ({filteredClients.length})
+                          </span>
+                          <p className="text-[7px] font-bold text-zinc-500 uppercase tracking-widest mt-0.5">
+                            Visualização contínua das fichas operacionais e anotações extras
+                          </p>
+                        </div>
+                      </div>
 
-                <button
-                  onClick={() => {
-                    setViewingPassengersRoute(null);
-                    setShowAddForm(false);
-                    setShowEditForm(false);
-                    setEditingRoute(null);
-                    setIsFloatingNavDismissed(true);
-                    navigate('/fretamento');
-                    toast.info("Retornando para a tela principal de fretados!");
-                  }}
-                  type="button"
-                  className="w-full py-2 bg-zinc-900/80 hover:bg-zinc-850 text-zinc-450 hover:text-white border border-zinc-850 hover:border-zinc-750 text-[9px] font-black uppercase tracking-widest rounded-xl transition-all flex items-center justify-center gap-1.5 cursor-pointer"
-                >
-                  VOLTAR AO PAINEL PRINCIPAL
-                </button>
+                      {filteredClients.length === 0 ? (
+                        <div className="bg-zinc-900/10 text-center py-10 rounded-2xl border border-dashed border-zinc-850 flex flex-col items-center justify-center space-y-2 text-zinc-500">
+                          <Building2 size={24} className="text-zinc-800" />
+                          <p className="text-[9px] font-black uppercase tracking-wider">Nenhum cliente cadastrado.</p>
+                        </div>
+                      ) : (
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          {filteredClients.map((client) => {
+                            const fixedRoutesCount = client.fixedRoutes?.length || 0;
+                            const workedDaysCount = client.workedDays?.length || 0;
+                            const clientTrips = clientCharters.filter(t => t.clientId === client.id && t.status !== 'cancelled');
+
+                            return (
+                              <div 
+                                key={client.id}
+                                className="bg-zinc-900/30 border border-zinc-900 hover:border-zinc-800 rounded-2xl p-4 flex flex-col justify-between transition-all group shadow-sm"
+                              >
+                                <div className="space-y-3">
+                                  {/* Header card details */}
+                                  <div className="flex justify-between items-start gap-2">
+                                    <div className="truncate">
+                                      <h4 className="text-[11px] font-black text-white uppercase tracking-tight group-hover:text-brand-accent transition-colors truncate">
+                                        {client.name}
+                                      </h4>
+                                      <p className="text-[7px] font-bold text-zinc-500 uppercase tracking-widest truncate">
+                                        {client.companyName || 'Razão Social não informada'}
+                                      </p>
+                                    </div>
+                                  </div>
+
+                                  {/* Contacts small badges */}
+                                  <div className="grid grid-cols-2 gap-1.5 text-[7px] font-mono text-zinc-400 uppercase bg-zinc-950/40 p-2 rounded-xl border border-zinc-900">
+                                    <div className="truncate">
+                                      <span className="text-zinc-650 block text-[6px]">DOC/CNPJ</span>
+                                      <span className="font-bold text-zinc-300 truncate block">{client.document || '---'}</span>
+                                    </div>
+                                    <div className="truncate">
+                                      <span className="text-zinc-650 block text-[6px]">TELEFONE</span>
+                                      <span className="font-bold text-zinc-300 truncate block">{client.phone || '---'}</span>
+                                    </div>
+                                  </div>
+
+                                  {/* Contract stats and schedules */}
+                                  <div className="grid grid-cols-2 gap-2 text-[7px] font-black uppercase tracking-wider">
+                                    <div className="bg-zinc-950/20 p-2 border border-zinc-900 rounded-xl">
+                                      <span className="text-zinc-500 block text-[6px]">ROTAS FIXAS</span>
+                                      <span className="text-white font-mono font-extrabold block mt-0.5">{fixedRoutesCount} Rotas</span>
+                                    </div>
+                                    <div className="bg-zinc-950/20 p-2 border border-zinc-900 rounded-xl">
+                                      <span className="text-zinc-500 block text-[6px]">PRESENÇA MÊS</span>
+                                      <span className="text-white font-mono font-extrabold block mt-0.5">{workedDaysCount} Dias</span>
+                                    </div>
+                                  </div>
+
+                                  {/* Anotações Extras de Viagens e Trabalhos */}
+                                  <div className="space-y-2 pt-2 border-t border-zinc-900/65 font-sans">
+                                    <div className="space-y-0.5">
+                                      <label className="text-[7px] font-black text-zinc-500 uppercase tracking-widest block font-sans">
+                                        Anotações de Viagens Extras (além das rotas fixas)
+                                      </label>
+                                      <textarea
+                                        className="w-full bg-zinc-950 border border-zinc-850 hover:border-zinc-800 focus:border-brand-accent rounded-lg p-2 text-[9px] text-zinc-300 placeholder-zinc-700 outline-none resize-none h-11 transition-all font-sans leading-relaxed"
+                                        placeholder="Digite observações de viagens adicionais..."
+                                        value={client.extraTripsNotes || ''}
+                                        onChange={async (e) => {
+                                          const text = e.target.value;
+                                          setClients(prev => prev.map(c => c.id === client.id ? { ...c, extraTripsNotes: text } : c));
+                                          try {
+                                            await updateDoc(doc(db, 'charter_clients', client.id), {
+                                              extraTripsNotes: text
+                                            });
+                                          } catch (err) {
+                                            console.error("Erro ao salvar:", err);
+                                          }
+                                        }}
+                                      />
+                                    </div>
+
+                                    <div className="space-y-0.5">
+                                      <label className="text-[7px] font-black text-zinc-500 uppercase tracking-widest block font-sans">
+                                        Anotações de Trabalhos Extras / Observações
+                                      </label>
+                                      <textarea
+                                        className="w-full bg-zinc-950 border border-zinc-850 hover:border-zinc-800 focus:border-brand-accent rounded-lg p-2 text-[9px] text-zinc-300 placeholder-zinc-700 outline-none resize-none h-11 transition-all font-sans leading-relaxed"
+                                        placeholder="Digite outros trabalhos e particularidades..."
+                                        value={client.extraWorksNotes || ''}
+                                        onChange={async (e) => {
+                                          const text = e.target.value;
+                                          setClients(prev => prev.map(c => c.id === client.id ? { ...c, extraWorksNotes: text } : c));
+                                          try {
+                                            await updateDoc(doc(db, 'charter_clients', client.id), {
+                                              extraWorksNotes: text
+                                            });
+                                          } catch (err) {
+                                            console.error("Erro ao salvar:", err);
+                                          }
+                                        }}
+                                      />
+                                    </div>
+                                  </div>
+                                </div>
+
+                                {/* Actions row */}
+                                <div className="grid grid-cols-2 gap-2 mt-3.5 pt-2.5 border-t border-zinc-900/60 font-sans">
+                                  <button
+                                    onClick={() => setSelectedClientDetail(client)}
+                                    className="py-1.5 bg-[#ff6b00] hover:bg-white text-zinc-950 text-[8px] font-black uppercase tracking-widest rounded-lg transition-all cursor-pointer flex items-center justify-center gap-1"
+                                  >
+                                    <Building2 size={10} /> Abrir Dossiê
+                                  </button>
+                                  <button
+                                    onClick={() => {
+                                      setNewClientCharter({
+                                        client: client.name,
+                                        clientId: client.id,
+                                        description: '',
+                                        dateTime: '',
+                                        origin: '',
+                                        destination: '',
+                                        value: client.defaultTripValue || 0,
+                                        driverId: '',
+                                        vehicleId: '',
+                                        status: 'pending',
+                                        paymentStatus: 'open',
+                                        passengerCount: 0,
+                                        isExtra: true,
+                                        hasExtraService: false,
+                                        extraServiceDesc: '',
+                                        extraServiceVal: 0
+                                      });
+                                      setShowClientAddForm(true);
+                                    }}
+                                    className="py-1.5 bg-zinc-900 hover:bg-zinc-850 border border-zinc-810 text-zinc-400 hover:text-white text-[8px] font-black uppercase tracking-widest rounded-lg transition-all cursor-pointer flex items-center justify-center gap-1"
+                                  >
+                                    <Plus size={10} /> Viagem Extra
+                                  </button>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Histórico Geral de Fretamentos Avulsos */}
+                    <div className="bg-zinc-950 border border-zinc-900 rounded-[32px] p-6 space-y-4">
+                      <div className="flex justify-between items-center pb-3 border-b border-zinc-900">
+                        <span className="text-[10px] font-black text-zinc-500 uppercase tracking-widest font-sans">
+                          Histórico Geral de Fretamentos Avulsos ({listedPeriodCharters.length})
+                        </span>
+                      </div>
+
+                      <div className="overflow-x-auto min-h-[300px]">
+                        <table className="w-full text-left text-xs border-collapse">
+                          <thead>
+                            <tr className="border-b border-zinc-900 text-zinc-500 uppercase text-[8px] font-black tracking-widest">
+                              <th className="py-3 px-3">Data / Hora</th>
+                              <th className="py-3 px-3">Cliente</th>
+                              <th className="py-3 px-3">Serviço/Itinerário</th>
+                              <th className="py-3 px-3 text-center">Ações</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-zinc-900/60 font-sans">
+                            {listedPeriodCharters.map((t) => {
+                              return (
+                                <tr key={t.id} className="hover:bg-zinc-900/20 font-sans text-white">
+                                  <td className="py-3 px-3 whitespace-nowrap align-middle">
+                                    {safeFormatDate(t.dateTime, 'dd/MM, HH:mm')}
+                                  </td>
+                                  <td className="py-3 px-3 align-middle font-extrabold uppercase">
+                                    {t.client}
+                                  </td>
+                                  <td className="py-3 px-3 align-middle uppercase truncate max-w-[150px]">
+                                    <div className="flex items-center gap-1.5 flex-wrap">
+                                      <span className="truncate">{t.description}</span>
+                                      {t.isExtra && (
+                                        <span className="px-1.5 py-0.5 rounded text-[6px] font-black uppercase tracking-wider bg-[#ff6b00]/20 text-[#ff6b00] border border-[#ff6b00]/30 font-sans shrink-0">
+                                          EXTRA
+                                        </span>
+                                      )}
+                                      {t.hasExtraService && (
+                                        <span className="px-1.5 py-0.5 rounded text-[6px] font-black uppercase tracking-wider bg-brand-accent/20 text-brand-accent border border-brand-accent/30 font-sans shrink-0">
+                                          + {t.extraServiceDesc?.toUpperCase()}
+                                        </span>
+                                      )}
+                                    </div>
+                                  </td>
+                                  <td className="py-3 px-3 text-center align-middle whitespace-nowrap">
+                                    <div className="flex gap-1.5 justify-center">
+                                      <button
+                                        onClick={() => {
+                                          setEditingClientCharter(t);
+                                          setShowClientEditForm(true);
+                                        }}
+                                        className="p-1 bg-zinc-900 hover:bg-zinc-850 text-amber-500 border border-zinc-850 rounded-lg cursor-pointer"
+                                        title="Editar"
+                                      >
+                                        <Edit size={12} />
+                                      </button>
+                                      <button
+                                        onClick={() => handleDeleteClientTrip(t.id)}
+                                        className="p-1 bg-zinc-900 hover:bg-rose-950/20 text-rose-500 border border-zinc-850 rounded-lg cursor-pointer"
+                                        title="Excluir"
+                                      >
+                                        <Trash2 size={12} />
+                                      </button>
+                                    </div>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  </>
+                ) : (
+                  <div className="flex-1">
+                    <div className="bg-zinc-950 border border-zinc-900 rounded-[32px] p-6 space-y-6">
+                        {(() => {
+                          const clientRoutes = routes.filter(r => r.client?.toLowerCase() === selectedClientDetail.name?.toLowerCase());
+                          const isOperationalOnly = !hasClientCharterAccess;
+                          const currentDetailTab = isOperationalOnly ? 'routes' : clientDetailTab;
+                          return (
+                            <>
+                              {/* Dynamic Active Client Detail View panel */}
+                              <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 pb-4 border-b border-zinc-900">
+                                <div className="flex items-center gap-3">
+                                  <div className="w-10 h-10 rounded-2xl bg-brand-accent/20 flex items-center justify-center text-brand-accent">
+                                    <Building2 size={20} />
+                                  </div>
+                                  <div>
+                                    <h3 className="text-base font-black text-white uppercase tracking-tight">
+                                      {selectedClientDetail.name}
+                                    </h3>
+                                    <p className="text-[8px] font-bold text-zinc-500 uppercase tracking-widest">
+                                      {selectedClientDetail.companyName || 'Razão social não formulada'}
+                                    </p>
+                                  </div>
+                                </div>
+
+                                <div className="flex gap-2.5 flex-wrap">
+                                  <button
+                                    onClick={() => {
+                                      setNewClientCharter({
+                                        client: selectedClientDetail.name,
+                                        clientId: selectedClientDetail.id,
+                                        description: '',
+                                        dateTime: '',
+                                        origin: '',
+                                        destination: '',
+                                        value: selectedClientDetail.defaultTripValue || 0,
+                                        driverId: '',
+                                        vehicleId: '',
+                                        status: 'pending',
+                                        paymentStatus: 'open',
+                                        passengerCount: 0,
+                                        isExtra: true,
+                                        hasExtraService: false,
+                                        extraServiceDesc: '',
+                                        extraServiceVal: 0
+                                      });
+                                      setShowClientAddForm(true);
+                                    }}
+                                    className="px-3.5 py-2 bg-zinc-900 hover:bg-zinc-850 text-[#ff6b00] border border-zinc-850 rounded-xl text-[9px] font-black uppercase tracking-widest cursor-pointer flex items-center gap-1.5"
+                                  >
+                                    <Sparkles size={11} className="text-[#ff6b00]" /> Viagem Extra
+                                  </button>
+                                  <button
+                                    onClick={() => {
+                                      setEditingClient(selectedClientDetail);
+                                      setShowEditClientForm(true);
+                                    }}
+                                    className="px-3.5 py-2 bg-zinc-900 hover:bg-zinc-850 text-amber-500 border border-zinc-850 rounded-xl text-[9px] font-black uppercase tracking-widest cursor-pointer"
+                                  >
+                                    Editar Cadastro
+                                  </button>
+                                  <button
+                                    onClick={() => handleDeleteClient(selectedClientDetail.id, selectedClientDetail.name)}
+                                    className="px-3 py-2 bg-zinc-900 hover:bg-rose-950/20 text-rose-500 border border-zinc-810 rounded-xl text-[9px] font-black uppercase tracking-widest cursor-pointer"
+                                  >
+                                    Remover
+                                  </button>
+                                </div>
+                              </div>
+
+                              {/* Seletor de Abas Internas da Ficha do Cliente */}
+                              {hasClientCharterAccess && (
+                                <div className="flex border-b border-zinc-900 pb-1 gap-4">
+                                  <button
+                                    onClick={() => setClientDetailTab('billing_frequency')}
+                                    className={cn(
+                                      "pb-2 px-1 text-[10px] font-black uppercase tracking-wider transition-all cursor-pointer border-b-2 relative",
+                                      currentDetailTab === 'billing_frequency'
+                                        ? "border-brand-accent text-brand-accent font-black"
+                                        : "border-transparent text-zinc-500 hover:text-zinc-300"
+                                    )}
+                                  >
+                                    Frequência e Acertos
+                                  </button>
+                                  <button
+                                    onClick={() => setClientDetailTab('routes')}
+                                    className={cn(
+                                      "pb-2 px-1 text-[10px] font-black uppercase tracking-wider transition-all cursor-pointer border-b-2 relative",
+                                      currentDetailTab === 'routes'
+                                        ? "border-brand-accent text-brand-accent font-black"
+                                        : "border-transparent text-zinc-500 hover:text-zinc-300"
+                                    )}
+                                  >
+                                    Rotas Contínuas (Recorrentes)
+                                  </button>
+                                  <button
+                                    onClick={() => setClientDetailTab('fixed_routes_contract')}
+                                    className={cn(
+                                      "pb-2 px-1 text-[10px] font-black uppercase tracking-wider transition-all cursor-pointer border-b-2 relative",
+                                      currentDetailTab === 'fixed_routes_contract'
+                                        ? "border-brand-accent text-brand-accent font-black"
+                                        : "border-transparent text-zinc-500 hover:text-zinc-300"
+                                    )}
+                                  >
+                                    Configurar Rotas Fixas
+                                  </button>
+                                </div>
+                              )}
+
+                              {currentDetailTab === 'billing_frequency' && (
+                                <>
+                                  {/* Calendar Presence Registry details */}
+                                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                          <div className="space-y-4">
+                            <span className="text-[9px] font-black text-zinc-500 uppercase tracking-widest block font-sans">
+                              Worked Presence Calendar (Frequência Mensal)
+                            </span>
+                            
+                            <div className="flex justify-between items-center bg-zinc-900 p-3.5 border border-zinc-850 rounded-2xl">
+                              <button 
+                                onClick={() => {
+                                  const d = new Date(currentCalendarDate);
+                                  d.setMonth(d.getMonth() - 1);
+                                  setCurrentCalendarDate(d);
+                                }}
+                                className="p-1 text-zinc-400 hover:text-white"
+                              >
+                                <ChevronLeft size={16} />
+                              </button>
+                              <span className="text-[10px] font-black uppercase tracking-wider text-white">
+                                {format(currentCalendarDate, 'MMMM yyyy')}
+                              </span>
+                              <button 
+                                onClick={() => {
+                                  const d = new Date(currentCalendarDate);
+                                  d.setMonth(d.getMonth() + 1);
+                                  setCurrentCalendarDate(d);
+                                }}
+                                className="p-1 text-zinc-400 hover:text-white"
+                              >
+                                <ChevronRight size={16} />
+                              </button>
+                            </div>
+
+                            {selectedClientDetail.fixedRoutes && selectedClientDetail.fixedRoutes.length > 0 && (
+                              <button
+                                onClick={() => handleAutoFillMonthWithFixedRoutes(selectedClientDetail.id)}
+                                className="w-full py-2.5 px-4 bg-brand-accent/10 border border-brand-accent/20 hover:bg-brand-accent hover:text-zinc-950 text-brand-accent rounded-xl text-[9px] font-black uppercase tracking-widest cursor-pointer transition-all flex items-center justify-center gap-1.5 shadow"
+                              >
+                                <Sparkles size={11} /> Preencher Mês por Rotas Fixas
+                              </button>
+                            )}
+
+                            {/* Calendar Grid rendering */}
+                            <div className="grid grid-cols-7 gap-1 text-center text-[9px] font-bold text-zinc-500">
+                              {['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'].map(w => (
+                                <div key={w} className="py-1 uppercase text-[8px]">{w}</div>
+                              ))}
+                              {calendarGridDays.map((day, idx) => {
+                                if (!day) return <div key={idx} />;
+                                const dateStr = format(day, 'yyyy-MM-dd');
+                                const isWorked = selectedClientDetail.workedDays?.includes(dateStr);
+                                return (
+                                  <button
+                                    key={idx}
+                                    onClick={() => handleToggleClientWorkedDay(selectedClientDetail.id, dateStr)}
+                                    className={cn(
+                                      "py-2 rounded-lg font-black text-[10px] transition-colors border cursor-pointer",
+                                      isWorked 
+                                        ? "bg-emerald-600 border-emerald-600 text-white shadow-sm" 
+                                        : "bg-zinc-950 border-zinc-900 text-zinc-400 hover:border-zinc-700"
+                                    )}
+                                  >
+                                    {day.getDate()}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+
+                          {/* Stat blocks for specific client profile */}
+                          <div className="space-y-6">
+                            <div className="bg-zinc-900/60 border border-zinc-900 rounded-[28px] p-5 space-y-4 flex flex-col justify-between">
+                              <div>
+                                <span className="text-[9px] font-black text-zinc-500 uppercase tracking-widest block font-sans">
+                                  Detalhes de Acertos
+                                </span>
+                                <div className="space-y-3.5 mt-3">
+                                  <div className="flex justify-between items-center text-xs">
+                                    <span className="font-bold text-zinc-400">Total de Viagens registradas</span>
+                                    <span className="font-extrabold text-white">{clientTripsForSelectedClient.length} serviços</span>
+                                  </div>
+
+                                  <div className="flex justify-between items-center text-xs">
+                                    <span className="font-bold text-zinc-400">Dossiês em Aberto</span>
+                                    <span className="font-extrabold text-amber-500">
+                                      {currentClientOpenTrips.length} viagens pendentes
+                                    </span>
+                                  </div>
+                                </div>
+                              </div>
+
+                              <button
+                                onClick={() => exportClientDossierPdf(selectedClientDetail, clientTripsForSelectedClient, employees, vehicles)}
+                                className="w-full py-3 bg-zinc-950 hover:bg-zinc-900 border border-zinc-850 text-zinc-400 hover:text-white rounded-2xl text-[9px] font-black uppercase tracking-widest transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                              >
+                                <FileText size={13} /> Dossiê Operacional Completo
+                              </button>
+                            </div>
+
+                            {/* Consulta por Período & Dossiê Customizado */}
+                            <div className="bg-zinc-900/60 border border-zinc-900 rounded-[28px] p-5 space-y-4">
+                              <div>
+                                <span className="text-[9px] font-black text-zinc-500 uppercase tracking-widest block font-sans">
+                                  Consulta de Serviços por Período
+                                </span>
+                                <p className="text-[8px] text-zinc-400 mt-1 uppercase tracking-wider">
+                                  Selecione as datas para apurar as rotas realizadas e gerar o dossiê detalhado
+                                </p>
+                                
+                                <div className="grid grid-cols-2 gap-3 mt-4">
+                                  <div>
+                                    <label className="text-[8px] font-black text-zinc-500 uppercase tracking-wider block mb-1 font-sans">
+                                      Data Inicial
+                                    </label>
+                                    <input 
+                                      type="date"
+                                      value={periodStartDate}
+                                      onChange={(e) => setPeriodStartDate(e.target.value)}
+                                      className="w-full bg-zinc-950 border border-zinc-850 text-white rounded-xl text-[10px] p-2.5 font-sans focus:outline-none focus:border-brand-accent transition-colors"
+                                    />
+                                  </div>
+                                  <div>
+                                    <label className="text-[8px] font-black text-zinc-500 uppercase tracking-wider block mb-1 font-sans">
+                                      Data Final
+                                    </label>
+                                    <input 
+                                      type="date"
+                                      value={periodEndDate}
+                                      onChange={(e) => setPeriodEndDate(e.target.value)}
+                                      className="w-full bg-zinc-950 border border-zinc-850 text-white rounded-xl text-[10px] p-2.5 font-sans focus:outline-none focus:border-brand-accent transition-colors"
+                                    />
+                                  </div>
+                                </div>
+
+                                <div className="space-y-3.5 mt-5 pt-4 border-t border-zinc-850/50">
+                                  <div className="flex justify-between items-center text-xs">
+                                    <span className="font-bold text-zinc-400">Serviços no período</span>
+                                    <span className="font-extrabold text-white">
+                                      {periodTripsStats.count} {periodTripsStats.count === 1 ? 'rota realizada' : 'rotas realizadas'}
+                                    </span>
+                                  </div>
+                                </div>
+                              </div>
+
+                              <button
+                                onClick={() => exportClientPeriodDossierPdf(selectedClientDetail, periodTrips, periodStartDate, periodEndDate, employees, vehicles)}
+                                disabled={periodTrips.length === 0}
+                                className={cn(
+                                  "w-full py-3 rounded-2xl text-[9px] font-black uppercase tracking-widest transition-all cursor-pointer flex items-center justify-center gap-1.5",
+                                  periodTrips.length > 0
+                                    ? "bg-brand-accent hover:bg-white text-zinc-950 shadow-md font-bold"
+                                    : "bg-zinc-850 text-zinc-600 border border-zinc-900 cursor-not-allowed font-medium"
+                                )}
+                              >
+                                <FileText size={13} /> Gerar Dossiê do Período
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+
+                         {/* Histórico Completo de Viagens para o Cliente */}
+                        <div className="pt-6 border-t border-zinc-900 space-y-4">
+                          <div className="flex justify-between items-center">
+                            <div>
+                              <h4 className="text-xs font-black text-white uppercase tracking-wider">Histórico de Fretamentos Avulsos</h4>
+                              <p className="text-[8px] text-zinc-500 uppercase tracking-widest mt-0.5">Todas as viagens lançadas para este cliente (Aberto, Faturado, Pago)</p>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <span className="text-[8px] font-black text-zinc-400 bg-zinc-900 border border-zinc-850 px-2.5 py-1 rounded-xl">
+                                {clientTripsForSelectedClient.length} no total
+                              </span>
+                              <button
+                                onClick={() => {
+                                  setNewClientCharter({
+                                    client: selectedClientDetail.name,
+                                    clientId: selectedClientDetail.id,
+                                    description: '',
+                                    dateTime: '',
+                                    origin: '',
+                                    destination: '',
+                                    value: selectedClientDetail.defaultTripValue || 0,
+                                    driverId: '',
+                                    vehicleId: '',
+                                    status: 'pending',
+                                    paymentStatus: 'open',
+                                    passengerCount: 0,
+                                    isExtra: true,
+                                    hasExtraService: false,
+                                    extraServiceDesc: '',
+                                    extraServiceVal: 0
+                                  });
+                                  setShowClientAddForm(true);
+                                }}
+                                className="text-[8px] font-black text-[#ff6b00] hover:text-white bg-[#ff6b00]/10 hover:bg-[#ff6b00] border border-[#ff6b00]/30 px-2.5 py-1 rounded-xl transition-all flex items-center gap-1 cursor-pointer font-sans"
+                              >
+                                <Plus size={10} /> VIAGEM EXTRA
+                              </button>
+                              {clientTripsForSelectedClient.length > 0 && (
+                                <button
+                                  onClick={() => handleClearClientTripHistory(selectedClientDetail.id, selectedClientDetail.name)}
+                                  className="text-[8px] font-black text-rose-500 hover:text-white bg-rose-950/20 hover:bg-rose-600 border border-rose-500/30 px-2.5 py-1 rounded-xl transition-all flex items-center gap-1 cursor-pointer"
+                                  title="Apagar todo o histórico de lançamentos deste cliente"
+                                >
+                                  <Trash2 size={10} /> APAGAR HISTÓRICO
+                                </button>
+                              )}
+                            </div>
+                          </div>
+
+                          {clientTripsForSelectedClient.length === 0 ? (
+                            <div className="bg-zinc-950/45 text-center py-6 rounded-2xl border border-dashed border-zinc-850">
+                              <p className="text-[9px] font-black text-zinc-500 uppercase tracking-wider">Nenhuma viagem registrada para este cliente.</p>
+                            </div>
+                          ) : (
+                            <div className="overflow-x-auto max-h-[250px] overflow-y-auto pr-1">
+                              <table className="w-full text-left text-xs border-collapse">
+                                <thead>
+                                  <tr className="border-b border-zinc-900 text-zinc-500 uppercase text-[7px] font-black tracking-widest">
+                                    <th className="py-2 px-3">Data / Hora</th>
+                                    <th className="py-2 px-3">Serviço/Itinerário</th>
+                                    <th className="py-2 px-3 text-center">Ações</th>
+                                  </tr>
+                                </thead>
+                                <tbody className="divide-y divide-zinc-900/40">
+                                  {[...clientTripsForSelectedClient]
+                                    .sort((a, b) => new Date(b.dateTime).getTime() - new Date(a.dateTime).getTime())
+                                    .map((trip) => {
+                                      return (
+                                        <tr key={trip.id} className="hover:bg-zinc-900/10 text-white font-sans text-[10px]">
+                                          <td className="py-2 px-3 whitespace-nowrap text-zinc-400">
+                                            {safeFormatDate(trip.dateTime, 'dd/MM/yyyy, HH:mm')}
+                                          </td>
+                                          <td className="py-2 px-3 align-middle font-semibold max-w-[150px] truncate">
+                                            <div className="flex items-center gap-1.5 flex-wrap">
+                                              <span className="uppercase">{trip.description}</span>
+                                              {trip.isExtra && (
+                                                <span className="px-1.5 py-0.5 rounded text-[5px] font-black uppercase tracking-wider bg-[#ff6b00]/20 text-[#ff6b00] border border-[#ff6b00]/30 font-sans">
+                                                  EXTRA
+                                                </span>
+                                              )}
+                                              {trip.hasExtraService && (
+                                                <span className="px-1.5 py-0.5 rounded text-[5px] font-black uppercase tracking-wider bg-brand-accent/20 text-brand-accent border border-brand-accent/30 font-sans">
+                                                  + {trip.extraServiceDesc?.toUpperCase()}
+                                                </span>
+                                              )}
+                                            </div>
+                                          </td>
+                                          <td className="py-2 px-3 text-center">
+                                            <div className="flex gap-1 justify-center">
+                                              <button
+                                                onClick={() => {
+                                                  setEditingClientCharter(trip);
+                                                  setShowClientEditForm(true);
+                                                }}
+                                                className="p-1 bg-zinc-900 hover:bg-zinc-800 text-amber-500 border border-zinc-850 rounded-lg cursor-pointer"
+                                                title="Editar Viagem"
+                                              >
+                                                <Edit size={10} />
+                                              </button>
+                                              <button
+                                                onClick={() => handleDeleteClientTrip(trip.id)}
+                                                className="p-1 bg-zinc-900 hover:bg-rose-950/20 text-rose-500 border border-zinc-850 rounded-lg cursor-pointer animate-none"
+                                                title="Excluir"
+                                              >
+                                                <Trash2 size={10} />
+                                              </button>
+                                            </div>
+                                          </td>
+                                        </tr>
+                                      );
+                                    })}
+                                </tbody>
+                              </table>
+                            </div>
+                          )}
+                        </div>
+                      </>)}
+
+                      {/* Conteúdo de Rotas Contínuas do Cliente */}
+                      {currentDetailTab === 'routes' && (
+                        <div className="space-y-6 pt-2">
+                          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 pb-3 border-b border-zinc-900">
+                            <div>
+                              <h4 className="text-xs font-black text-white uppercase tracking-wider">Rotas Contínuas do Cliente</h4>
+                              <p className="text-[8px] text-zinc-500 uppercase tracking-widest mt-0.5">Escalas de Fretamento Recorrentes e Itinerários cadastrados</p>
+                            </div>
+                            
+                            {hasClientCharterAccess && (
+                              <button
+                                onClick={() => setShowAddForm(true)}
+                                className="py-2 px-4 bg-brand-accent hover:bg-white text-zinc-950 rounded-xl text-[9px] font-black uppercase tracking-wider flex items-center gap-2 cursor-pointer shadow transition-all active:scale-95 shrink-0"
+                              >
+                                <Plus size={12} /> Cadastrar Rota
+                              </button>
+                            )}
+                          </div>
+
+                          {clientRoutes.length === 0 ? (
+                            <div className="bg-zinc-950/45 text-center py-10 rounded-2xl border border-dashed border-zinc-850 flex flex-col items-center justify-center space-y-2 text-zinc-500">
+                              <Route size={24} className="text-zinc-800" />
+                              <p className="text-[9px] font-black uppercase tracking-wider">Nenhuma rota contínua cadastrada para este cliente.</p>
+                              {hasClientCharterAccess && (
+                                <button
+                                  onClick={() => setShowAddForm(true)}
+                                  className="mt-1 text-[8px] font-black text-[#ff6b00] hover:text-white uppercase tracking-widest underline cursor-pointer"
+                                >
+                                  Cadastrar Primeira Rota
+                                </button>
+                              )}
+                            </div>
+                          ) : (
+                            <div className="space-y-4 max-h-[500px] overflow-y-auto pr-1">
+                              {clientRoutes.map((route) => {
+                                const matchedDriver = employees.find(e => e.id === route.fixedDriverId);
+                                const matchedVehicle = vehicles.find(v => v.id === route.fixedVehicleId);
+                                const totPsgs = (route.passengers || []).length;
+
+                                return (
+                                  <div
+                                    key={route.id}
+                                    className={cn(
+                                      "bg-zinc-900/40 p-5 rounded-[24px] border transition-all hover:border-zinc-800 relative group overflow-hidden shadow-sm",
+                                      route.runState === 'running' 
+                                        ? "border-rose-500/40 shadow-[0_4px_25px_rgba(239,68,68,0.1)]" 
+                                        : "border-zinc-900"
+                                    )}
+                                  >
+                                    {route.runState === 'running' && (
+                                      <span className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-rose-500 via-pink-600 to-amber-500 animate-pulse" />
+                                    )}
+
+                                    <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                                      <div className="flex items-start gap-3.5">
+                                        <div className={cn(
+                                          "w-9 h-9 rounded-xl flex items-center justify-center shrink-0 border transition-all",
+                                          route.runState === 'running'
+                                            ? "bg-rose-950/45 text-rose-500 border-rose-500/25 animate-pulse"
+                                            : "bg-zinc-950 text-zinc-500 border-zinc-850"
+                                        )}>
+                                          {route.runState === 'running' ? <Compass size={18} className="animate-spin-slow" /> : <Route size={18} />}
+                                        </div>
+
+                                        <div>
+                                          <div className="flex items-center gap-2 flex-wrap">
+                                            <span className="text-[9px] font-black text-zinc-500 uppercase tracking-widest">{route.client}</span>
+                                            <span className="text-zinc-800">•</span>
+                                            <span className={cn(
+                                              "text-[7px] font-black uppercase px-2 py-0.5 rounded border tracking-wider",
+                                              route.type === 'factory' 
+                                                ? "bg-amber-500/5 text-amber-500 border-amber-500/10" 
+                                                : "bg-indigo-500/5 text-indigo-500 border-indigo-500/10"
+                                            )}>
+                                              {route.type === 'factory' ? 'Fábrica' : route.type === 'school' ? 'Escolar' : 'Avulso/Outro'}
+                                            </span>
+                                          </div>
+                                          <h3 className="text-xs font-black text-white uppercase tracking-tight mt-1 truncate">
+                                            {route.name}
+                                          </h3>
+                                          <p className="text-[8px] font-bold text-zinc-650 uppercase tracking-widest mt-1">
+                                            {matchedDriver ? `Mot. Fixo: ${matchedDriver.name.toUpperCase().split(' ')[0]}` : 'Nenhum motorista fixado'} 
+                                            {matchedVehicle ? ` • Placa: ${matchedVehicle.plate.toUpperCase()}` : ''}
+                                          </p>
+                                        </div>
+                                      </div>
+
+                                      <div className="flex items-center gap-1.5 w-full md:w-auto justify-end border-t border-zinc-900/60 md:border-0 pt-3 md:pt-0">
+                                        <button
+                                          onClick={() => handleToggleRunRoute(route)}
+                                          className={cn(
+                                            "px-3 py-1.5 rounded-xl text-[8px] font-black uppercase tracking-widest flex items-center gap-1 cursor-pointer transition-all active:scale-95",
+                                            route.runState === 'running'
+                                              ? "bg-rose-600 hover:bg-rose-500 text-white shadow-lg shadow-rose-900/10"
+                                              : "bg-zinc-900 text-[#ff6b00] border border-zinc-850 hover:bg-brand-accent hover:text-zinc-950 hover:border-brand-accent font-sans"
+                                          )}
+                                        >
+                                          {route.runState === 'running' ? (
+                                            <><span className="w-1.5 h-1.5 rounded-full bg-white animate-ping shrink-0" /> Monitorar</>
+                                          ) : (
+                                            <><Play size={8} /> Iniciar GPS</>
+                                          )}
+                                        </button>
+
+                                        <button
+                                          onClick={() => exportRouteToOfflineHtml(route)}
+                                          className="p-1.5 bg-zinc-950 hover:bg-zinc-900 text-emerald-500 rounded-lg border border-zinc-850 cursor-pointer"
+                                          title="Exportar HTML Navegador Offline"
+                                        >
+                                          <Smartphone size={12} />
+                                        </button>
+                                        <button
+                                          onClick={() => exportRouteToGpx(route)}
+                                          className="p-1.5 bg-zinc-950 hover:bg-zinc-900 text-indigo-400 rounded-lg border border-zinc-850 cursor-pointer"
+                                          title="Exportar Itinerário GPX (Offilne Maps)"
+                                        >
+                                          <MapPin size={12} />
+                                        </button>
+                                        <button
+                                          onClick={() => exportRouteToPdf(route)}
+                                          className="p-1.5 bg-zinc-950 hover:bg-zinc-900 text-zinc-400 rounded-lg border border-zinc-850 cursor-pointer"
+                                          title="Gerar PDF Imprimir"
+                                        >
+                                          <Printer size={12} />
+                                        </button>
+                                        
+                                        {hasClientCharterAccess && (
+                                          <>
+                                            <button
+                                              onClick={() => {
+                                                setEditingRoute(route);
+                                                setShowEditForm(true);
+                                              }}
+                                              className="p-1.5 bg-zinc-950 hover:bg-zinc-900 text-amber-500 rounded-lg border border-zinc-850 cursor-pointer"
+                                              title="Editar Fretamento"
+                                            >
+                                              <Edit size={12} />
+                                            </button>
+                                            <button
+                                              onClick={() => handleDeleteRoutePrompt(route.id, route.name)}
+                                              className="p-1.5 bg-zinc-950 hover:bg-rose-950/20 text-rose-500 rounded-lg border border-zinc-850 cursor-pointer"
+                                              title="Excluir"
+                                            >
+                                              <Trash2 size={12} />
+                                            </button>
+                                          </>
+                                        )}
+                                      </div>
+                                    </div>
+
+                                    {route.schedules && route.schedules.length > 0 && route.daysOfWeek && (
+                                      <div className="mt-3.5 pt-3 border-t border-zinc-900/60 flex justify-between items-center text-[8px] font-bold text-zinc-650 uppercase tracking-widest flex-wrap gap-2">
+                                        <div className="flex items-center gap-1 text-zinc-500">
+                                          <Clock size={10} className="text-zinc-700" />
+                                          <span>Horários: {route.schedules.map(sc => `${sc.departureTime} -> ${sc.returnTime}`).join(' | ')}</span>
+                                        </div>
+                                        <div className="flex gap-0.5">
+                                          {['D', 'S', 'T', 'Q', 'Q', 'S', 'S'].map((dayChar, i) => {
+                                            const isAct = route.daysOfWeek.includes(i);
+                                            return (
+                                              <span
+                                                key={i}
+                                                className={cn(
+                                                  "w-3.5 h-3.5 rounded-md flex items-center justify-center text-[7px] font-black border",
+                                                  isAct 
+                                                    ? "bg-[#ff6b00]/10 text-[#ff6b00] border-[#ff6b00]/20 font-sans" 
+                                                    : "bg-zinc-950 text-zinc-800 border-zinc-900/60"
+                                                )}
+                                              >
+                                                {dayChar}
+                                              </span>
+                                            );
+                                          })}
+                                        </div>
+                                        <div className="flex items-center gap-1 text-zinc-500">
+                                          <Users size={10} className="text-zinc-700" />
+                                          <span>Passageiros: <span className="font-extrabold text-white">{totPsgs}</span></span>
+                                        </div>
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {currentDetailTab === 'fixed_routes_contract' && (
+                        <div className="space-y-6 pt-2">
+                          <div className="pb-3 border-b border-zinc-900">
+                            <h4 className="text-xs font-black text-white uppercase tracking-wider">Configuração de Rotas Fixas do Contrato</h4>
+                            <p className="text-[8px] text-zinc-500 uppercase tracking-widest mt-0.5 font-sans">Vincule horários e motoristas pré-definidos para faturamentos consolidados</p>
+                          </div>
+
+                          {/* Recharts Route Frequency Bar Chart */}
+                          {selectedClientDetail.fixedRoutes && selectedClientDetail.fixedRoutes.length > 0 && (
+                            <div className="bg-zinc-900/20 p-5 rounded-[24px] border border-zinc-900 space-y-4 animate-fade-in">
+                              <div className="flex justify-between items-center pb-2 border-b border-zinc-900/60">
+                                <div>
+                                  <span className="text-[9px] font-black text-[#ff6b00] uppercase tracking-widest block font-sans">
+                                    Frequência de Execução de Rotas
+                                  </span>
+                                  <p className="text-[7px] text-zinc-500 uppercase tracking-widest font-sans font-bold mt-0.5">
+                                    Controle mensal de execuções para evitar gargalos de escala
+                                  </p>
+                                </div>
+                                <span className="text-[7px] font-black uppercase text-zinc-400 bg-zinc-950 border border-zinc-850 px-1.5 py-0.5 rounded shrink-0">
+                                  COMPETÊNCIA: {format(currentCalendarDate, 'MM/yyyy')}
+                                </span>
+                              </div>
+
+                              <div className="w-full">
+                                <ResponsiveContainer width="100%" height={220}>
+                                  <BarChart data={routeExecutionData} margin={{ top: 10, right: 10, left: -25, bottom: 0 }}>
+                                    <CartesianGrid strokeDasharray="3 3" stroke="#27272a" opacity={0.3} vertical={false} />
+                                    <XAxis 
+                                      dataKey="name" 
+                                      stroke="#71717a" 
+                                      fontSize={8} 
+                                      tickLine={false} 
+                                      axisLine={false}
+                                      tickFormatter={(value) => value.length > 12 ? `${value.slice(0, 10)}...` : value}
+                                    />
+                                    <YAxis 
+                                      stroke="#71717a" 
+                                      fontSize={8} 
+                                      tickLine={false} 
+                                      axisLine={false}
+                                      allowDecimals={false}
+                                    />
+                                    <Tooltip 
+                                      content={({ active, payload }) => {
+                                        if (active && payload && payload.length) {
+                                          const data = payload[0].payload;
+                                          return (
+                                            <div className="bg-zinc-950 border border-zinc-850 p-3 rounded-xl shadow-lg space-y-1 text-[9px] uppercase font-bold tracking-widest text-zinc-400">
+                                              <p className="font-extrabold text-white">{data.name}</p>
+                                              <p>Frequência: <span className="text-[#ff6b00] font-black">{data.frequency}x</span></p>
+                                              <p>Motorista Padrão: <span className="text-white font-extrabold">{data.defaultDriver}</span></p>
+                                              <p className="text-[7px] text-zinc-500 normal-case font-medium leading-normal">Escalas: {data.driverBreakdown}</p>
+                                            </div>
+                                          );
+                                        }
+                                        return null;
+                                      }} 
+                                      cursor={{ fill: 'rgba(255, 107, 0, 0.04)' }} 
+                                    />
+                                    <Bar 
+                                      dataKey="frequency" 
+                                      fill="#ff6b00" 
+                                      radius={[6, 6, 0, 0]} 
+                                      barSize={32}
+                                    />
+                                  </BarChart>
+                                </ResponsiveContainer>
+                              </div>
+
+                              {/* Allocation insight details */}
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
+                                <div className="bg-zinc-950/40 p-4 rounded-[20px] border border-zinc-900/60 space-y-2">
+                                  <div className="flex items-center gap-2 text-[#ff6b00] text-[8px] font-black uppercase tracking-wider">
+                                    <AlertCircle size={12} />
+                                    <span>Prevenção de Gargalos</span>
+                                  </div>
+                                  <p className="text-[9px] text-zinc-400 font-bold uppercase leading-relaxed font-sans">
+                                    Analise se a frequência de viagens na rota condiz com o contratado e se há sobrecarga ou trocas excessivas do motorista titular.
+                                  </p>
+                                </div>
+                                <div className="bg-zinc-950/40 p-4 rounded-[20px] border border-zinc-900/60 space-y-2">
+                                  <span className="text-[8px] font-black text-zinc-500 uppercase tracking-widest block font-sans">Estatísticas Operacionais</span>
+                                  <div className="space-y-1.5">
+                                    {routeExecutionData.map((data, idx) => (
+                                      <div key={idx} className="flex justify-between items-center text-[8px] font-bold uppercase tracking-wide">
+                                        <span className="text-zinc-400 truncate max-w-[130px]">{data.name}</span>
+                                        <span className="text-white shrink-0 font-extrabold font-mono">
+                                          {data.frequency}X (Padrão: {data.defaultDriver})
+                                        </span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Form to Add New Fixed Route */}
+                          {hasClientCharterAccess && (
+                            <div className="bg-zinc-900/40 p-5 rounded-[24px] border border-zinc-900 space-y-4">
+                              <span className="text-[9px] font-black text-[#ff6b00] uppercase tracking-widest block font-sans">
+                                Cadastrar Nova Rota Fixa
+                              </span>
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div className="space-y-1.5">
+                                  <label className="text-[8px] font-black text-zinc-500 uppercase tracking-widest block">Nome da Rota</label>
+                                  <input
+                                    type="text"
+                                    value={newFixedRouteName}
+                                    onChange={(e) => setNewFixedRouteName(e.target.value)}
+                                    placeholder="EX: ROTA INTENORTE VESPERTINO"
+                                    className="w-full bg-zinc-950 border border-zinc-850 focus:border-brand-accent rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-zinc-700 outline-none uppercase font-bold transition-all"
+                                  />
+                                </div>
+                                <div className="space-y-1.5">
+                                  <label className="text-[8px] font-black text-zinc-500 uppercase tracking-widest block">Horário Pré-definido</label>
+                                  <input
+                                    type="text"
+                                    value={newFixedRouteSchedule}
+                                    onChange={(e) => setNewFixedRouteSchedule(e.target.value)}
+                                    placeholder="EX: 06:15 - 15:30"
+                                    className="w-full bg-zinc-950 border border-zinc-850 focus:border-brand-accent rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-zinc-700 outline-none uppercase font-bold transition-all"
+                                  />
+                                </div>
+                                <div className="space-y-1.5">
+                                  <label className="text-[8px] font-black text-zinc-500 uppercase tracking-widest block">Motorista Pré-definido</label>
+                                  <select
+                                    value={newFixedRouteDriverId}
+                                    onChange={(e) => setNewFixedRouteDriverId(e.target.value)}
+                                    className="w-full bg-zinc-950 border border-zinc-850 focus:border-brand-accent rounded-xl px-3.5 py-2.5 text-xs text-white outline-none transition-all uppercase font-bold cursor-pointer"
+                                  >
+                                    <option value="" className="text-zinc-500">SELECIONE UM MOTORISTA</option>
+                                    {employees.filter(emp => emp.role?.toLowerCase().includes('motorista') || emp.role?.toLowerCase().includes('driver')).map((emp) => (
+                                      <option key={emp.id} value={emp.id}>{emp.name.toUpperCase()}</option>
+                                    ))}
+                                  </select>
+                                </div>
+                                <div className="space-y-1.5">
+                                  <label className="text-[8px] font-black text-zinc-500 uppercase tracking-widest block">Veículo Opcional</label>
+                                  <select
+                                    value={newFixedRouteVehicleId}
+                                    onChange={(e) => setNewFixedRouteVehicleId(e.target.value)}
+                                    className="w-full bg-zinc-950 border border-zinc-850 focus:border-brand-accent rounded-xl px-3.5 py-2.5 text-xs text-white outline-none transition-all uppercase font-bold cursor-pointer"
+                                  >
+                                    <option value="" className="text-zinc-500">SELECIONE UM VEÍCULO (OPCIONAL)</option>
+                                    {vehicles.map((veh) => (
+                                      <option key={veh.id} value={veh.id}>{veh.plate.toUpperCase()} - {veh.model.toUpperCase()}</option>
+                                    ))}
+                                  </select>
+                                </div>
+                                <div className="space-y-1.5 md:col-span-2">
+                                  <label className="text-[8px] font-black text-zinc-500 uppercase tracking-widest block">Dias da Semana</label>
+                                  <div className="flex flex-wrap gap-1.5 pt-1">
+                                    {[
+                                      { value: 1, label: 'Seg' },
+                                      { value: 2, label: 'Ter' },
+                                      { value: 3, label: 'Qua' },
+                                      { value: 4, label: 'Qui' },
+                                      { value: 5, label: 'Sex' },
+                                      { value: 6, label: 'Sáb' },
+                                      { value: 0, label: 'Dom' }
+                                    ].map((day) => {
+                                      const isSelected = newFixedRouteDays.includes(day.value);
+                                      return (
+                                        <button
+                                          key={day.value}
+                                          type="button"
+                                          onClick={() => {
+                                            setNewFixedRouteDays(prev => 
+                                              prev.includes(day.value)
+                                                ? prev.filter(d => d !== day.value)
+                                                : [...prev, day.value]
+                                            );
+                                          }}
+                                          className={cn(
+                                            "py-2 px-3.5 rounded-xl text-[9px] font-black uppercase tracking-wider transition-all cursor-pointer border",
+                                            isSelected
+                                              ? "bg-[#ff6b00] border-[#ff6b00] text-white shadow-sm font-extrabold"
+                                              : "bg-zinc-950 border-zinc-850 text-zinc-400 hover:border-zinc-700"
+                                          )}
+                                        >
+                                          {day.label}
+                                        </button>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+                              </div>
+                              <div className="flex justify-end pt-1">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (!newFixedRouteName || !newFixedRouteSchedule || !newFixedRouteDriverId) {
+                                      toast.error("Por favor, preencha nome da rota, horário e motorista.");
+                                      return;
+                                    }
+                                    if (newFixedRouteDays.length === 0) {
+                                      toast.error("Por favor, selecione pelo menos um dia da semana.");
+                                      return;
+                                    }
+                                    handleAddFixedRoute(selectedClientDetail.id, {
+                                      name: newFixedRouteName,
+                                      schedule: newFixedRouteSchedule,
+                                      driverId: newFixedRouteDriverId,
+                                      vehicleId: newFixedRouteVehicleId || undefined,
+                                      daysOfWeek: newFixedRouteDays
+                                    });
+                                  }}
+                                  className="py-2.5 px-5 bg-brand-accent hover:bg-white text-zinc-950 font-black text-[9px] uppercase tracking-wider rounded-xl transition-all cursor-pointer flex items-center gap-1.5 shadow active:scale-95"
+                                >
+                                  <Plus size={12} /> Adicionar Rota Fixa
+                                </button>
+                              </div>
+                            </div>
+                          )}
+
+                          {/* List of Registered Fixed Routes */}
+                          <div className="space-y-3">
+                            <span className="text-[9px] font-black text-zinc-500 uppercase tracking-widest block font-sans">
+                              Rotas Contratadas Cadastradas ({selectedClientDetail.fixedRoutes?.length || 0})
+                            </span>
+
+                            {!selectedClientDetail.fixedRoutes || selectedClientDetail.fixedRoutes.length === 0 ? (
+                              <div className="bg-zinc-950/45 text-center py-10 rounded-2xl border border-dashed border-zinc-850 flex flex-col items-center justify-center space-y-2 text-zinc-500">
+                                <Route size={24} className="text-zinc-800" />
+                                <p className="text-[9px] font-black uppercase tracking-wider">Nenhuma rota fixa vinculada a este contrato.</p>
+                                <p className="text-[8px] text-zinc-650 font-bold uppercase">Preencha o formulário acima para configurar horários e motoristas.</p>
+                              </div>
+                            ) : (
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                {selectedClientDetail.fixedRoutes.map((route) => {
+                                  const routeDriver = employees.find(e => e.id === route.driverId);
+                                  const routeVehicle = vehicles.find(v => v.id === route.vehicleId);
+                                  return (
+                                    <div key={route.id} className="bg-zinc-900/40 border border-zinc-900 rounded-[24px] p-4 flex flex-col justify-between hover:border-zinc-800 transition-all">
+                                      <div className="flex justify-between items-start gap-4">
+                                        <div className="space-y-1">
+                                          <h5 className="text-[10px] font-black text-white uppercase tracking-wider">{route.name}</h5>
+                                          <div className="flex items-center gap-1.5 text-[8px] font-bold text-[#ff6b00] uppercase tracking-widest">
+                                            <Clock size={10} /> {route.schedule}
+                                          </div>
+                                          {route.daysOfWeek && route.daysOfWeek.length > 0 && (
+                                            <div className="flex flex-wrap gap-1 mt-1.5">
+                                              {[
+                                                { val: 1, label: 'S' },
+                                                { val: 2, label: 'T' },
+                                                { val: 3, label: 'Q' },
+                                                { val: 4, label: 'Q' },
+                                                { val: 5, label: 'S' },
+                                                { val: 6, label: 'S' },
+                                                { val: 0, label: 'D' }
+                                              ].map((d, i) => {
+                                                const active = route.daysOfWeek?.includes(d.val);
+                                                return (
+                                                  <span
+                                                    key={i}
+                                                    className={cn(
+                                                      "w-4 h-4 rounded-md flex items-center justify-center text-[7px] font-black border",
+                                                      active
+                                                        ? "bg-[#ff6b00]/10 text-[#ff6b00] border-[#ff6b00]/20 font-sans"
+                                                        : "bg-zinc-950 text-zinc-700 border-zinc-900/30"
+                                                    )}
+                                                    title={d.label}
+                                                  >
+                                                    {d.label}
+                                                  </span>
+                                                );
+                                              })}
+                                            </div>
+                                          )}
+                                        </div>
+                                        {hasClientCharterAccess && (
+                                          <button
+                                            onClick={() => handleRemoveFixedRoute(selectedClientDetail.id, route.id)}
+                                            className="p-1.5 bg-zinc-950 hover:bg-rose-950/20 text-rose-500 rounded-lg border border-zinc-850 cursor-pointer transition-all"
+                                            title="Excluir"
+                                          >
+                                            <Trash2 size={12} />
+                                          </button>
+                                        )}
+                                      </div>
+                                      <div className="mt-4 pt-3 border-t border-zinc-900/60 flex justify-between items-center text-[8px] font-bold text-zinc-500 uppercase tracking-widest">
+                                        <div>
+                                          <p className="text-[7px] text-zinc-600">MOTORISTA FIXO</p>
+                                          <p className="font-extrabold text-white mt-0.5">{routeDriver ? routeDriver.name.toUpperCase() : 'NÃO DEFINIDO'}</p>
+                                        </div>
+                                        <div className="text-right">
+                                          <p className="text-[7px] text-zinc-600">VEÍCULO FIXO</p>
+                                          <p className="font-extrabold text-white mt-0.5">{routeVehicle ? `${routeVehicle.plate.toUpperCase()} (${routeVehicle.model.toUpperCase()})` : 'NÃO DEFINIDO'}</p>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                    </>
+                  );
+                })()}
               </div>
             </div>
-          </div>
-        );
-      })()}
+          )}
+              </div>
+            </div>
+          </motion.div>
 
-      <ConfirmModal
-        isOpen={deleteConfirm.isOpen}
-        onClose={() => setDeleteConfirm(prev => ({ ...prev, isOpen: false }))}
-        onConfirm={deleteConfirm.onConfirm}
-        title={deleteConfirm.title}
-        message={deleteConfirm.message}
-      />
+      {/* Global Form Modals - Continuous Routes */}
+      <AnimatePresence>
+        {showAddForm && (
+          <AddRouteModal
+            isOpen={showAddForm}
+            onClose={() => setShowAddForm(false)}
+            vehicles={vehicles}
+            employees={employees}
+            onAddRoute={handleCreateRouteSubmit}
+          />
+        )}
+
+        {showEditForm && editingRoute && (
+          <EditRouteModal
+            isOpen={showEditForm}
+            onClose={() => {
+              setShowEditForm(false);
+              setEditingRoute(null);
+            }}
+            vehicles={vehicles}
+            employees={employees}
+            editingRoute={editingRoute}
+            onUpdateRoute={handleUpdateRouteSubmit}
+          />
+        )}
+      </AnimatePresence>
+
+      {/* Client Closing Dossier Invoicing modal */}
+      <AnimatePresence>
+        {isClosingModalOpen && selectedClientDetail && (
+          <ClientClosingModal
+            isOpen={isClosingModalOpen}
+            onClose={() => {
+              setIsClosingModalOpen(false);
+              setClosingPreviewData(null);
+            }}
+            selectedClientDetail={selectedClientDetail}
+            closingMonthYear={closingMonthYear}
+            onUpdateMonthYear={setClosingMonthYear}
+            filteredClosingTrips={filteredClosingTrips}
+            selectedClosingTrips={selectedClosingTrips}
+            onToggleTripSelected={(id) => {
+              setSelectedClosingTrips(prev => ({
+                ...prev,
+                [id]: !prev[id]
+              }));
+            }}
+            onToggleSelectAll={() => {
+              const allSelected = filteredClosingTrips.every(t => selectedClosingTrips[t.id]);
+              const next: Record<string, boolean> = {};
+              filteredClosingTrips.forEach(t => {
+                next[t.id] = !allSelected;
+              });
+              setSelectedClosingTrips(next);
+            }}
+            employees={employees}
+            vehicles={vehicles}
+            onGeneratePDF={async () => {
+              const activeToClose = filteredClosingTrips.filter(t => selectedClosingTrips[t.id]);
+              try {
+                const openToClose = activeToClose.filter(t => t.paymentStatus === 'open');
+                if (openToClose.length > 0) {
+                  for (const t of openToClose) {
+                    await updateDoc(doc(db, 'charter_client_trips', t.id), {
+                      paymentStatus: 'billed',
+                      updatedAt: serverTimestamp()
+                    });
+                  }
+                  toast.success(`${openToClose.length} viagem(ns) marcada(s) como faturada(s) (aguardando pagamento)!`);
+                }
+              } catch (error) {
+                console.error("Erro ao atualizar status das viagens:", error);
+                toast.error("Erro ao atualizar status para faturado.");
+              }
+              exportClosingPdf(selectedClientDetail, activeToClose, employees, vehicles, setClosingPreviewData);
+            }}
+            onWhatsAppSummary={handleSendWhatsAppClosingSummary}
+            onEmailSummary={handleSendEmailClosingSummary}
+            onBulkUpdate={handleBulkUpdateClosingTrips}
+            closingPreviewData={closingPreviewData}
+            onClearPreview={() => setClosingPreviewData(null)}
+            onPrintDossierContent={() => window.print()}
+          />
+        )}
+      </AnimatePresence>
+
+      {/* Register Client Profile modal */}
+      <AnimatePresence>
+        {showRegisterClientForm && (
+          <div className="fixed inset-0 z-[9950] overflow-y-auto bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-zinc-900 border border-zinc-805 rounded-[32px] w-full max-w-lg shadow-2xl overflow-hidden"
+            >
+              <div className="p-6 border-b border-zinc-800 flex justify-between items-center bg-zinc-950/40">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-2xl bg-brand-accent/20 flex items-center justify-center text-brand-accent">
+                    <Building2 size={20} />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-black text-white uppercase tracking-tight">Cadastrar Cliente Fretamento</h3>
+                    <p className="text-[8px] font-bold text-zinc-500 uppercase tracking-wider mt-0.5">Criar novo contrato recorrente para acertos de caixa</p>
+                  </div>
+                </div>
+                <button onClick={() => setShowRegisterClientForm(false)} className="text-zinc-500 hover:text-white">
+                  <X size={18} />
+                </button>
+              </div>
+
+              <div className="p-6 space-y-4">
+                <div className="space-y-1.5">
+                  <label className="text-[8px] font-black text-zinc-500 uppercase tracking-widest block ml-1">Nome Fantasia (Apelido Rota) *</label>
+                  <Input 
+                    placeholder="Ex: Aurora Filial Norte" 
+                    value={newClient.name}
+                    onChange={(e) => setNewClient({...newClient, name: e.target.value})}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-[8px] font-black text-zinc-500 uppercase tracking-widest block ml-1 font-sans">Razão Social Completa</label>
+                  <Input 
+                    placeholder="Ex: Aurora Alimentos S/A" 
+                    value={newClient.companyName}
+                    onChange={(e) => setNewClient({...newClient, companyName: e.target.value})}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-[8px] font-black text-zinc-500 uppercase tracking-widest block ml-1 font-sans">Documento (CNPJ / CPF)</label>
+                  <Input 
+                    placeholder="Ex: 00.111.222/0001-33" 
+                    value={newClient.document}
+                    onChange={(e) => setNewClient({...newClient, document: e.target.value})}
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <label className="text-[8px] font-black text-zinc-500 uppercase tracking-widest block ml-1 font-sans">Valor Padrão da Viagem</label>
+                    <Input 
+                      type="number"
+                      placeholder="R$ 150,00" 
+                      value={newClient.defaultTripValue || ''}
+                      onChange={(e) => setNewClient({...newClient, defaultTripValue: parseFloat(e.target.value) || 0})}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-[8px] font-black text-zinc-500 uppercase tracking-widest block ml-1 font-sans">Contato Responsável</label>
+                    <Input 
+                      placeholder="Ex: 4799887766" 
+                      value={newClient.phone}
+                      onChange={(e) => setNewClient({...newClient, phone: e.target.value})}
+                    />
+                  </div>
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-[8px] font-black text-zinc-500 uppercase tracking-widest block ml-1 font-sans font-sans">E-mail Financeiro</label>
+                  <Input 
+                    placeholder="Ex: financeiro@aurora.com.br" 
+                    value={newClient.email}
+                    onChange={(e) => setNewClient({...newClient, email: e.target.value})}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-[8px] font-black text-zinc-500 uppercase tracking-widest block ml-1 font-sans font-sans">Endereço de Cobrança</label>
+                  <Input 
+                    placeholder="Ex: Rua das Flores, 120" 
+                    value={newClient.address}
+                    onChange={(e) => setNewClient({...newClient, address: e.target.value})}
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <label className="text-[8px] font-black text-zinc-500 uppercase tracking-widest block ml-1 font-sans">Viagens Extras (Anotação)</label>
+                    <textarea
+                      placeholder="Anotações sobre viagens extras..."
+                      className="w-full bg-zinc-950 border border-zinc-850 hover:border-zinc-800 focus:border-brand-accent rounded-xl p-2.5 text-[10px] text-zinc-200 outline-none resize-none h-14 transition-all"
+                      value={newClient.extraTripsNotes}
+                      onChange={(e) => setNewClient({...newClient, extraTripsNotes: e.target.value})}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-[8px] font-black text-zinc-500 uppercase tracking-widest block ml-1 font-sans">Trabalhos Extras (Anotação)</label>
+                    <textarea
+                      placeholder="Anotações sobre outros trabalhos..."
+                      className="w-full bg-zinc-950 border border-zinc-850 hover:border-zinc-800 focus:border-brand-accent rounded-xl p-2.5 text-[10px] text-zinc-200 outline-none resize-none h-14 transition-all"
+                      value={newClient.extraWorksNotes}
+                      onChange={(e) => setNewClient({...newClient, extraWorksNotes: e.target.value})}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="p-6 border-t border-zinc-800 flex justify-end gap-3 bg-zinc-950/20">
+                <Button onClick={() => setShowRegisterClientForm(false)} variant="secondary" className="px-6 rounded-2xl font-black">
+                  CANCELAR
+                </Button>
+                <Button onClick={handleAddClientSubmit} className="bg-brand-accent text-zinc-950 px-8 font-black rounded-2xl">
+                  CADASTRAR CLIENTE
+                </Button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+
+        {showEditClientForm && editingClient && (
+          <div className="fixed inset-0 z-[9950] overflow-y-auto bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-zinc-900 border border-zinc-805 rounded-[32px] w-full max-w-lg shadow-2xl overflow-hidden"
+            >
+              <div className="p-6 border-b border-zinc-800 flex justify-between items-center bg-zinc-950/40">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-2xl bg-brand-accent/20 flex items-center justify-center text-brand-accent">
+                    <Building2 size={20} />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-black text-white uppercase tracking-tight font-sans">Editar Ficha do Cliente</h3>
+                    <p className="text-[8px] font-bold text-zinc-500 uppercase tracking-wider mt-0.5 font-sans">Salvar alterações de contabilidade de cobrança</p>
+                  </div>
+                </div>
+                <button onClick={() => { setShowEditClientForm(false); setEditingClient(null); }} className="text-zinc-500 hover:text-white">
+                  <X size={18} />
+                </button>
+              </div>
+
+              <div className="p-6 space-y-4">
+                <div className="space-y-1.5">
+                  <label className="text-[8px] font-black text-zinc-500 uppercase tracking-widest block ml-1 font-sans">Nome Fantasia (Apelido Rota) *</label>
+                  <Input 
+                    placeholder="Ex: Aurora Filial Norte" 
+                    value={editingClient.name}
+                    onChange={(e) => setEditingClient({...editingClient, name: e.target.value})}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-[8px] font-black text-zinc-500 uppercase tracking-widest block ml-1 font-sans">Razão Social Completa</label>
+                  <Input 
+                    placeholder="Ex: Aurora Alimentos S/A" 
+                    value={editingClient.companyName}
+                    onChange={(e) => setEditingClient({...editingClient, companyName: e.target.value})}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-[8px] font-black text-zinc-500 uppercase tracking-widest block ml-1 font-sans">Documento (CNPJ / CPF)</label>
+                  <Input 
+                    placeholder="Ex: 00.111.222/0001-33" 
+                    value={editingClient.document}
+                    onChange={(e) => setEditingClient({...editingClient, document: e.target.value})}
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <label className="text-[8px] font-black text-[#ff6b00] uppercase tracking-widest block ml-1 font-sans font-sans">Valor Padrão da Viagem</label>
+                    <Input 
+                      type="number"
+                      placeholder="R$ 150,00" 
+                      value={editingClient.defaultTripValue || ''}
+                      onChange={(e) => setEditingClient({...editingClient, defaultTripValue: parseFloat(e.target.value) || 0})}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-[8px] font-black text-zinc-500 uppercase tracking-widest block ml-1 font-sans">Contato Responsável</label>
+                    <Input 
+                      placeholder="Ex: 4799887766" 
+                      value={editingClient.phone}
+                      onChange={(e) => setEditingClient({...editingClient, phone: e.target.value})}
+                    />
+                  </div>
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-[8px] font-black text-zinc-500 uppercase tracking-widest block ml-1 font-sans">E-mail Financeiro</label>
+                  <Input 
+                    placeholder="Ex: financeiro@aurora.com.br" 
+                    value={editingClient.email || ''}
+                    onChange={(e) => setEditingClient({...editingClient, email: e.target.value})}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-[8px] font-black text-zinc-500 uppercase tracking-widest block ml-1 font-sans font-sans">Endereço de Cobrança</label>
+                  <Input 
+                    placeholder="Ex: Rua das Flores, 120" 
+                    value={editingClient.address || ''}
+                    onChange={(e) => setEditingClient({...editingClient, address: e.target.value})}
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <label className="text-[8px] font-black text-zinc-500 uppercase tracking-widest block ml-1 font-sans">Viagens Extras (Anotação)</label>
+                    <textarea
+                      placeholder="Anotações sobre viagens extras..."
+                      className="w-full bg-zinc-950 border border-zinc-850 hover:border-zinc-800 focus:border-brand-accent rounded-xl p-2.5 text-[10px] text-zinc-200 outline-none resize-none h-14 transition-all"
+                      value={editingClient.extraTripsNotes || ''}
+                      onChange={(e) => setEditingClient({...editingClient, extraTripsNotes: e.target.value})}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-[8px] font-black text-zinc-500 uppercase tracking-widest block ml-1 font-sans">Trabalhos Extras (Anotação)</label>
+                    <textarea
+                      placeholder="Anotações sobre outros trabalhos..."
+                      className="w-full bg-zinc-950 border border-zinc-850 hover:border-zinc-800 focus:border-brand-accent rounded-xl p-2.5 text-[10px] text-zinc-200 outline-none resize-none h-14 transition-all"
+                      value={editingClient.extraWorksNotes || ''}
+                      onChange={(e) => setEditingClient({...editingClient, extraWorksNotes: e.target.value})}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="p-6 border-t border-zinc-800 flex justify-end gap-3 bg-zinc-950/20 font-sans">
+                <Button onClick={() => { setShowEditClientForm(false); setEditingClient(null); }} variant="secondary" className="px-6 rounded-2xl font-black font-sans">
+                  CANCELAR
+                </Button>
+                <Button onClick={handleUpdateClientSubmit} className="bg-brand-accent text-zinc-950 px-8 font-black rounded-2xl font-sans">
+                  SALVAR ALTERAÇÕES
+                </Button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Lançar Viagem Avulsa (Novo Fretamento por Cliente) */}
+      <AnimatePresence>
+        {showClientAddForm && (
+          <div className="fixed inset-0 z-[9950] overflow-y-auto bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-zinc-900 border border-zinc-800 rounded-[32px] w-full max-w-3xl shadow-2xl overflow-hidden max-h-[90vh] flex flex-col"
+            >
+              <div className="p-6 border-b border-zinc-800 flex justify-between items-center bg-zinc-950/40">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-2xl bg-brand-accent/20 flex items-center justify-center text-brand-accent">
+                    <Receipt size={20} />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-black text-white uppercase tracking-tight">Lançar Viagem/Fretamento Avulso</h3>
+                    <p className="text-[8px] font-bold text-zinc-500 uppercase tracking-wider mt-0.5">Criar novos serviços ou saídas exclusivas agendadas</p>
+                  </div>
+                </div>
+                <button onClick={() => { setShowClientAddForm(false); setSelectedLaunchDays([]); }} className="text-zinc-500 hover:text-white">
+                  <X size={18} />
+                </button>
+              </div>
+
+              <div className="p-6 overflow-y-auto space-y-5 flex-1">
+                {/* Banner de Modo de Preenchimento */}
+                <div className="flex items-center justify-between bg-zinc-950 p-4 border border-zinc-850 rounded-[20px] transition-all">
+                  <div className="flex items-center gap-2.5">
+                    <div className={cn(
+                      "w-8 h-8 rounded-xl flex items-center justify-center transition-all",
+                      isQuickMode ? "bg-[#ff6b00]/15 text-[#ff6b00]" : "bg-zinc-900 text-zinc-500"
+                    )}>
+                      <Zap size={16} className={isQuickMode ? "animate-pulse" : ""} />
+                    </div>
+                    <div>
+                      <span className="text-[10px] font-black text-white uppercase tracking-wider block font-sans">Modo de Preenchimento Rápido</span>
+                      <span className="text-[7px] font-bold text-zinc-500 uppercase tracking-widest block font-sans">
+                        {isQuickMode 
+                          ? "Ativo: preencha apenas cliente e data. Rota/detalhes salvos como 'A definir'." 
+                          : "Inativo: preencha todos os campos detalhadamente."}
+                      </span>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setIsQuickMode(!isQuickMode)}
+                    className={cn(
+                      "py-1.5 px-3 border rounded-xl text-[9px] font-black uppercase transition-all flex items-center gap-1.5 cursor-pointer",
+                      isQuickMode
+                        ? "bg-[#ff6b00]/15 border-[#ff6b00]/40 text-[#ff6b00] font-sans font-extrabold"
+                        : "bg-zinc-900 border-zinc-800 text-zinc-400 hover:border-zinc-700 font-sans"
+                    )}
+                  >
+                    {isQuickMode ? "Modo Rápido ON" : "Ativar Modo Rápido"}
+                  </button>
+                </div>
+
+                <div className={cn("grid gap-4", isQuickMode ? "grid-cols-1" : "grid-cols-1 md:grid-cols-2")}>
+                  <div className="space-y-1.5">
+                    <label className="text-[8px] font-black text-[#ff6b00] uppercase tracking-widest block ml-1 font-sans">Selecionar Cliente Contrato *</label>
+                    <select
+                      value={newClientCharter.clientId}
+                      onChange={(e) => {
+                        const cl = clients.find(c => c.id === e.target.value);
+                        setNewClientCharter({
+                          ...newClientCharter,
+                          clientId: e.target.value,
+                          client: cl ? cl.name : '',
+                          value: cl?.defaultTripValue || 0
+                        });
+                      }}
+                      className="w-full bg-zinc-900 border border-zinc-805 rounded-xl py-2 px-3 text-xs text-white outline-none focus:border-brand-accent"
+                    >
+                      <option value="">SELECIONE DO BANCO DE CLIENTES</option>
+                      {clients.map(c => (
+                        <option key={c.id} value={c.id}>{c.name.toUpperCase()}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {!isQuickMode && (
+                    <div className="space-y-1.5">
+                      <label className="text-[8px] font-black text-zinc-500 uppercase tracking-widest block ml-1">Descrição / Finalidade do Serviço *</label>
+                      <Input
+                        placeholder="Ex: Transporte Viagem de Campo Noturna"
+                        value={newClientCharter.description}
+                        onChange={(e) => setNewClientCharter({...newClientCharter, description: e.target.value})}
+                      />
+                    </div>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 bg-zinc-950 p-4 border border-zinc-850 rounded-2xl">
+                  {/* Calendar multi launch dates selection */}
+                  <div className="space-y-2">
+                    <div className="flex justify-between items-center text-[8px] font-black uppercase text-zinc-500 tracking-wider">
+                      <span>Dias para lançamento em lote</span>
+                      {selectedLaunchDays.length > 0 && (
+                        <span className="text-brand-accent font-sans">{selectedLaunchDays.length} selecionados</span>
+                      )}
+                    </div>
+                    
+                    <div className="flex justify-between items-center bg-zinc-900 p-2 border border-zinc-850 rounded-xl mb-1">
+                      <button 
+                        type="button"
+                        onClick={() => {
+                          const d = new Date(launchCalendarDate);
+                          d.setMonth(d.getMonth() - 1);
+                          setLaunchCalendarDate(d);
+                        }}
+                        className="text-zinc-500 hover:text-white"
+                      >
+                        <ChevronLeft size={12} />
+                      </button>
+                      <span className="text-[9px] font-black uppercase text-white tracking-widest">
+                        {format(launchCalendarDate, 'MMMM yyyy')}
+                      </span>
+                      <button 
+                        type="button"
+                        onClick={() => {
+                          const d = new Date(launchCalendarDate);
+                          d.setMonth(d.getMonth() + 1);
+                          setLaunchCalendarDate(d);
+                        }}
+                        className="text-zinc-500 hover:text-white"
+                      >
+                        <ChevronRight size={12} />
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-7 gap-0.5 text-center text-[7px] font-black uppercase text-zinc-650">
+                      {['D', 'S', 'T', 'Q', 'Q', 'S', 'S'].map((w, idx) => <span key={idx}>{w}</span>)}
+                      {launchCalendarGridDays.map((day, idx) => {
+                        if (!day) return <span key={idx} />;
+                        const dateStr = format(day, 'yyyy-MM-dd');
+                        const isSel = selectedLaunchDays.includes(dateStr);
+                        return (
+                          <button
+                            key={idx}
+                            type="button"
+                            onClick={() => handleToggleDaySelectionInLaunch(dateStr)}
+                            className={cn(
+                              "py-1 text-[8px] font-black rounded-md border cursor-pointer",
+                              isSel 
+                                ? "bg-emerald-600 border-emerald-500 text-white font-sans" 
+                                : "bg-zinc-950 border-zinc-900 text-zinc-500"
+                            )}
+                          >
+                            {day.getDate()}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <div className="space-y-3">
+                    <div className="space-y-1">
+                      <label className="text-[8px] font-black text-zinc-500 uppercase tracking-widest">Horário de Saída (Lote)</label>
+                      <Input
+                        type="time"
+                        value={launchTime}
+                        onChange={(e) => setLaunchTime(e.target.value)}
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[8px] font-black text-zinc-500 uppercase tracking-widest">Data / Hora de Embarque Geral *</label>
+                      <Input 
+                        type="datetime-local" 
+                        value={newClientCharter.dateTime}
+                        onChange={(e) => setNewClientCharter({...newClientCharter, dateTime: e.target.value})}
+                        disabled={selectedLaunchDays.length > 0}
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {!isQuickMode ? (
+                  <>
+                    <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
+                      <div className="space-y-1.5">
+                        <label className="text-[8px] font-black text-zinc-500 uppercase tracking-widest block ml-1 font-sans">Origem / Garagem</label>
+                        <Input 
+                          placeholder="Ex: Rio do Sul, Centro" 
+                          value={newClientCharter.origin}
+                          onChange={(e) => setNewClientCharter({...newClientCharter, origin: e.target.value})}
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <label className="text-[8px] font-black text-zinc-500 uppercase tracking-widest block ml-1 font-sans">Destino Final</label>
+                        <Input 
+                          placeholder="Ex: Blumenau, Term. Central" 
+                          value={newClientCharter.destination}
+                          onChange={(e) => setNewClientCharter({...newClientCharter, destination: e.target.value})}
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <label className="text-[8px] font-black text-[#ff6b00] uppercase tracking-widest block ml-1 font-sans">Preço do Serviço (R$)</label>
+                        <Input 
+                          type="number"
+                          placeholder="Ex: R$ 350.00" 
+                          value={newClientCharter.value || ''}
+                          onChange={(e) => setNewClientCharter({...newClientCharter, value: parseFloat(e.target.value) || 0})}
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <label className="text-[8px] font-black text-zinc-500 uppercase tracking-widest block ml-1 font-sans">Qtd. Passageiros</label>
+                        <Input 
+                          type="number"
+                          placeholder="Ex: 15" 
+                          value={newClientCharter.passengerCount || ''}
+                          onChange={(e) => setNewClientCharter({...newClientCharter, passengerCount: parseInt(e.target.value) || 0})}
+                        />
+                      </div>
+                      <div className="space-y-1.5 flex flex-col justify-end">
+                        <label className="text-[8px] font-black text-zinc-500 uppercase tracking-widest block ml-1 font-sans mb-1">Configuração Especial</label>
+                        <button
+                          type="button"
+                          onClick={() => setNewClientCharter({...newClientCharter, isExtra: !newClientCharter.isExtra})}
+                          className={cn(
+                            "w-full py-2 px-3 border rounded-xl text-[10px] font-bold uppercase transition-all flex items-center justify-center gap-1.5 cursor-pointer h-[38px]",
+                            newClientCharter.isExtra
+                              ? "bg-[#ff6b00]/10 border-[#ff6b00] text-[#ff6b00] shadow-sm font-sans"
+                              : "bg-zinc-950 border-zinc-850 text-zinc-400 hover:border-zinc-700 font-sans"
+                          )}
+                        >
+                          <Sparkles size={11} className={newClientCharter.isExtra ? "text-[#ff6b00]" : "text-zinc-500"} />
+                          {newClientCharter.isExtra ? "Viagem Extra Ativa" : "Viagem Extra?"}
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Opção de Serviço Extra opcional */}
+                    <div className="bg-zinc-950 p-4 border border-zinc-850 rounded-2xl space-y-4">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <Sparkles size={14} className={newClientCharter.hasExtraService ? "text-brand-accent animate-pulse" : "text-zinc-500"} />
+                          <div>
+                            <span className="text-[10px] font-black text-white uppercase tracking-wider block font-sans">Opção de Serviço Extra</span>
+                            <span className="text-[7px] font-bold text-zinc-500 uppercase tracking-widest block font-sans">Descrever serviço adicional e o valor cobrado</span>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setNewClientCharter({
+                            ...newClientCharter,
+                            hasExtraService: !newClientCharter.hasExtraService
+                          })}
+                          className={cn(
+                            "py-1.5 px-3 border rounded-xl text-[9px] font-black uppercase transition-all flex items-center gap-1.5 cursor-pointer",
+                            newClientCharter.hasExtraService
+                              ? "bg-brand-accent/15 border-brand-accent/40 text-brand-accent font-sans"
+                              : "bg-zinc-900 border-zinc-800 text-zinc-400 hover:border-zinc-700 font-sans"
+                          )}
+                        >
+                          {newClientCharter.hasExtraService ? "Desativar Serviço Extra" : "Ativar Serviço Extra"}
+                        </button>
+                      </div>
+
+                      {newClientCharter.hasExtraService && (
+                        <motion.div 
+                          initial={{ opacity: 0, y: -10 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2 border-t border-zinc-900/60 font-sans"
+                        >
+                          <div className="space-y-1.5 md:col-span-2">
+                            <label className="text-[8px] font-black text-zinc-400 uppercase tracking-widest block ml-1 font-sans">Descrição do Serviço Extra *</label>
+                            <Input 
+                              placeholder="Ex: Serviço de bordo / Pedágio / Hospedagem motorista" 
+                              value={newClientCharter.extraServiceDesc || ''}
+                              onChange={(e) => setNewClientCharter({...newClientCharter, extraServiceDesc: e.target.value})}
+                            />
+                          </div>
+                          <div className="space-y-1.5">
+                            <label className="text-[8px] font-black text-[#ff6b00] uppercase tracking-widest block ml-1 font-sans">Valor Cobrado (R$)*</label>
+                            <Input 
+                              type="number"
+                              placeholder="Ex: R$ 150.00" 
+                              value={newClientCharter.extraServiceVal || ''}
+                              onChange={(e) => setNewClientCharter({...newClientCharter, extraServiceVal: parseFloat(e.target.value) || 0})}
+                            />
+                          </div>
+                        </motion.div>
+                      )}
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div className="space-y-1.5">
+                        <label className="text-[8px] font-black text-zinc-500 uppercase tracking-widest block ml-1 font-sans">Motorista Responsável</label>
+                        <Select 
+                          value={newClientCharter.driverId}
+                          onChange={(e) => setNewClientCharter({...newClientCharter, driverId: e.target.value})}
+                          options={[
+                            { value: '', label: 'NENHUM ALOCADO' },
+                            ...employees.filter(e => e.role === 'Motorista' || e.role === 'admin' || e.role === 'Operacional').map(e => ({
+                              value: e.id,
+                              label: e.name.toUpperCase()
+                            }))
+                          ]}
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <label className="text-[8px] font-black text-zinc-500 uppercase tracking-widest block ml-1 font-sans block">Placa do Veículo</label>
+                        <Select 
+                          value={newClientCharter.vehicleId}
+                          onChange={(e) => setNewClientCharter({...newClientCharter, vehicleId: e.target.value})}
+                          options={[
+                            { value: '', label: 'NENHUM ALOCADO' },
+                            ...vehicles.map(v => ({
+                              value: v.id,
+                              disabled: v.status === 'maintenance' || v.status === 'unavailable',
+                              label: `${v.plate?.toUpperCase()} - ${v.model?.toUpperCase()}`
+                            }))
+                          ]}
+                        />
+                      </div>
+                    </div>
+                  </>
+                ) : (
+                  <div className="bg-zinc-950/40 border border-dashed border-zinc-850 rounded-2xl p-5 text-center text-zinc-500 text-[9px] uppercase font-bold tracking-wider space-y-1.5">
+                    <p className="text-brand-accent flex items-center justify-center gap-1">⚡ MODO DE PREENCHIMENTO RÁPIDO ATIVADO</p>
+                    <p className="text-zinc-500 font-medium normal-case font-sans max-w-md mx-auto leading-relaxed">
+                      Os detalhes operacionais (descrição, preço, origem, destino, motorista e veículo) serão salvos com os valores padrões do contrato ou como "A definir". Você poderá detalhar e editar todas as informações desta rota posteriormente quando desejar.
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              <div className="p-6 border-t border-zinc-800 flex justify-end gap-3 bg-zinc-950/20 font-sans">
+                <Button onClick={() => { setShowClientAddForm(false); setSelectedLaunchDays([]); }} variant="secondary" className="px-6 rounded-2xl font-black font-sans">
+                  CANCELAR
+                </Button>
+                <Button onClick={handleAddNewClientTripSubmit} className="bg-brand-accent text-zinc-950 px-8 font-black rounded-2xl font-sans">
+                  LANÇAR VIAGEM
+                </Button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+
+        {/* Editar Fretamento Faturavel do Cliente */}
+        {showClientEditForm && editingClientCharter && (
+          <div className="fixed inset-0 z-[9950] overflow-y-auto bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-zinc-900 border border-zinc-800 rounded-[32px] w-full max-w-3xl shadow-2xl overflow-hidden max-h-[90vh] flex flex-col font-sans"
+            >
+              <div className="p-6 border-b border-zinc-800 flex justify-between items-center bg-zinc-950/40 font-mono">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-2xl bg-brand-accent/20 flex items-center justify-center text-brand-accent">
+                    <Receipt size={20} />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-black text-white uppercase tracking-tight font-sans font-sans">Editar Fretamento Financeiro</h3>
+                    <p className="text-[8px] font-bold text-zinc-500 uppercase tracking-wider mt-0.5 font-sans font-sans">Atualizar detalhes contábeis do serviço do cliente</p>
+                  </div>
+                </div>
+                <button onClick={() => { setShowClientEditForm(false); setEditingClientCharter(null); }} className="text-zinc-500 hover:text-white">
+                  <X size={18} />
+                </button>
+              </div>
+
+              <div className="p-6 overflow-y-auto space-y-5 flex-1">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <label className="text-[8px] font-black text-zinc-500 uppercase tracking-widest block ml-1 font-sans font-sans">Cliente Fretamento Contrato</label>
+                    <input
+                      type="text"
+                      className="w-full bg-zinc-950 border border-zinc-850 rounded-xl py-2 px-3 text-xs text-zinc-500 uppercase font-bold outline-none cursor-not-allowed"
+                      value={editingClientCharter.client}
+                      disabled
+                    />
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="text-[8px] font-black text-zinc-500 uppercase tracking-widest block ml-1 font-sans">Descrição do Serviço *</label>
+                    <Input
+                      placeholder="Ex: Transporte Viagem de Campo Noturna"
+                      value={editingClientCharter.description}
+                      onChange={(e) => setEditingClientCharter({...editingClientCharter, description: e.target.value})}
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <label className="text-[8px] font-black text-zinc-500 uppercase tracking-widest block ml-1 font-sans">Data / Hora de Embarque *</label>
+                    <Input 
+                      type="datetime-local" 
+                      value={editingClientCharter.dateTime}
+                      onChange={(e) => setEditingClientCharter({...editingClientCharter, dateTime: e.target.value})}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-[8px] font-black text-[#ff6b00] uppercase tracking-widest block ml-1 font-sans">Preço do Serviço (R$)</label>
+                    <Input 
+                      type="number"
+                      placeholder="Ex: R$ 350.00" 
+                      value={editingClientCharter.value || ''}
+                      onChange={(e) => setEditingClientCharter({...editingClientCharter, value: parseFloat(e.target.value) || 0})}
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div className="space-y-1.5">
+                    <label className="text-[8px] font-black text-zinc-500 uppercase tracking-widest block ml-1 font-sans">Origem / Garagem</label>
+                    <Input 
+                      placeholder="Ex: Rio do Sul, Centro" 
+                      value={editingClientCharter.origin}
+                      onChange={(e) => setEditingClientCharter({...editingClientCharter, origin: e.target.value})}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-[8px] font-black text-zinc-500 uppercase tracking-widest block ml-1 font-sans block">Destino Final</label>
+                    <Input 
+                      placeholder="Ex: Blumenau, Term. Central" 
+                      value={editingClientCharter.destination}
+                      onChange={(e) => setEditingClientCharter({...editingClientCharter, destination: e.target.value})}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-[8px] font-black text-zinc-500 uppercase tracking-widest block ml-1 font-sans block">Qtd. Passageiros</label>
+                    <Input 
+                      type="number"
+                      placeholder="Ex: 15" 
+                      value={editingClientCharter.passengerCount || ''}
+                      onChange={(e) => setEditingClientCharter({...editingClientCharter, passengerCount: parseInt(e.target.value) || 0})}
+                    />
+                  </div>
+                </div>
+
+                {/* Opção de Serviço Extra opcional (Edição) */}
+                <div className="bg-zinc-950 p-4 border border-zinc-850 rounded-2xl space-y-4">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Sparkles size={14} className={editingClientCharter.hasExtraService ? "text-brand-accent animate-pulse" : "text-zinc-500"} />
+                      <div>
+                        <span className="text-[10px] font-black text-white uppercase tracking-wider block font-sans">Opção de Serviço Extra</span>
+                        <span className="text-[7px] font-bold text-zinc-500 uppercase tracking-widest block font-sans">Descrever serviço adicional e o valor cobrado</span>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setEditingClientCharter({
+                        ...editingClientCharter,
+                        hasExtraService: !editingClientCharter.hasExtraService
+                      })}
+                      className={cn(
+                        "py-1.5 px-3 border rounded-xl text-[9px] font-black uppercase transition-all flex items-center gap-1.5 cursor-pointer",
+                        editingClientCharter.hasExtraService
+                          ? "bg-brand-accent/15 border-brand-accent/40 text-brand-accent font-sans"
+                          : "bg-zinc-900 border-zinc-800 text-zinc-400 hover:border-zinc-700 font-sans"
+                      )}
+                    >
+                      {editingClientCharter.hasExtraService ? "Desativar Serviço Extra" : "Ativar Serviço Extra"}
+                    </button>
+                  </div>
+
+                  {editingClientCharter.hasExtraService && (
+                    <motion.div 
+                      initial={{ opacity: 0, y: -10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2 border-t border-zinc-900/60 font-sans"
+                    >
+                      <div className="space-y-1.5 md:col-span-2">
+                        <label className="text-[8px] font-black text-zinc-400 uppercase tracking-widest block ml-1 font-sans">Descrição do Serviço Extra *</label>
+                        <Input 
+                          placeholder="Ex: Serviço de bordo / Pedágio / Hospedagem motorista" 
+                          value={editingClientCharter.extraServiceDesc || ''}
+                          onChange={(e) => setEditingClientCharter({...editingClientCharter, extraServiceDesc: e.target.value})}
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <label className="text-[8px] font-black text-[#ff6b00] uppercase tracking-widest block ml-1 font-sans">Valor Cobrado (R$)*</label>
+                        <Input 
+                          type="number"
+                          placeholder="Ex: R$ 150.00" 
+                          value={editingClientCharter.extraServiceVal || ''}
+                          onChange={(e) => setEditingClientCharter({...editingClientCharter, extraServiceVal: parseFloat(e.target.value) || 0})}
+                        />
+                      </div>
+                    </motion.div>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <label className="text-[8px] font-black text-zinc-500 uppercase tracking-widest block ml-1 font-sans">Motorista Responsável</label>
+                    <Select 
+                      value={editingClientCharter.driverId}
+                      onChange={(e) => setEditingClientCharter({...editingClientCharter, driverId: e.target.value})}
+                      options={[
+                        { value: '', label: 'NENHUM ALOCADO' },
+                        ...employees.filter(e => e.role === 'Motorista' || e.role === 'admin' || e.role === 'Operacional').map(e => ({
+                          value: e.id,
+                          label: e.name.toUpperCase()
+                        }))
+                      ]}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-[8px] font-black text-zinc-500 uppercase tracking-widest block ml-1 font-sans block">Placa do Veículo</label>
+                    <Select 
+                      value={editingClientCharter.vehicleId}
+                      onChange={(e) => setEditingClientCharter({...editingClientCharter, vehicleId: e.target.value})}
+                      options={[
+                        { value: '', label: 'NENHUM ALOCADO' },
+                        ...vehicles.map(v => ({
+                          value: v.id,
+                          disabled: v.status === 'maintenance' || v.status === 'unavailable',
+                          label: `${v.plate?.toUpperCase()} - ${v.model?.toUpperCase()}`
+                        }))
+                      ]}
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4 bg-zinc-950 p-4 border border-zinc-850 rounded-2xl mt-2 font-mono">
+                  <div className="space-y-1">
+                    <label className="text-[8px] font-black text-zinc-500 uppercase tracking-widest">Situação Operacional</label>
+                    <Select
+                      value={editingClientCharter.status}
+                      onChange={(e) => setEditingClientCharter({...editingClientCharter, status: e.target.value as any})}
+                    >
+                      <option value="pending">PENDENTE / PROGRAMADO</option>
+                      <option value="completed">REALIZADO / EXECUTADO</option>
+                      <option value="cancelled">CANCELADO (NÃO COBRAR)</option>
+                    </Select>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[8px] font-black text-zinc-500 uppercase tracking-widest">Financeiro Cobrança</label>
+                    <Select
+                      value={editingClientCharter.paymentStatus}
+                      onChange={(e) => setEditingClientCharter({...editingClientCharter, paymentStatus: e.target.value as any})}
+                    >
+                      <option value="open">EM ABERTO</option>
+                      <option value="billed">FATURADO (DOSSIÊ)</option>
+                      <option value="received">LIQUIDADO / PAGO</option>
+                    </Select>
+                  </div>
+                </div>
+              </div>
+
+              <div className="p-6 border-t border-zinc-800 flex justify-end gap-3 bg-zinc-950/20 font-sans">
+                <Button onClick={() => { setShowClientEditForm(false); setEditingClientCharter(null); }} variant="secondary" className="px-6 rounded-2xl font-black font-sans">
+                  CANCELAR
+                </Button>
+                <Button onClick={handleUpdateClientTripSubmit} className="bg-brand-accent text-zinc-950 px-8 font-black rounded-2xl font-sans">
+                  SALVAR ALTERAÇÕES
+                </Button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Confirm Modal Excluir */}
+      <AnimatePresence>
+        {deleteConfirm.isOpen && (
+          <ConfirmModal
+            isOpen={deleteConfirm.isOpen}
+            onClose={() => setDeleteConfirm(prev => ({ ...prev, isOpen: false }))}
+            onConfirm={deleteConfirm.onConfirm}
+            title={deleteConfirm.title}
+            message={deleteConfirm.message}
+            confirmVariant="danger"
+            confirmLabel="EXCLUIR REGISTRO"
+          />
+        )}
+      </AnimatePresence>
     </div>
   );
 };

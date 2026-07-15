@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { collection, query, onSnapshot, doc, updateDoc, serverTimestamp, addDoc, deleteDoc } from 'firebase/firestore';
+import { collection, query, onSnapshot, doc, updateDoc, serverTimestamp, addDoc, deleteDoc, getDocs } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { Journey, Employee, WorkShift } from '../types';
 import { format, parseISO, startOfMonth, endOfMonth, isWithinInterval, addHours, getDay } from 'date-fns';
@@ -8,9 +8,7 @@ import { toast } from 'sonner';
 import { Card } from './Cards';
 import { Edit3, User as UserIcon, Save, Plus, FileText, Download, Printer, Clock, Trash2, Calendar as CalendarIcon, ChevronDown } from 'lucide-react';
 import { cn } from '../lib/utils';
-import { Modal, ConfirmModal } from './UI';
-import jsPDF from 'jspdf';
-import autoTable from 'jspdf-autotable';
+import { Modal, ConfirmModal, Input, Button } from './UI';
 
 interface PointManagementProps {
     user: any;
@@ -46,6 +44,9 @@ export const PointManagement = ({ user }: PointManagementProps) => {
         journey: null
     });
     const longPressTimer = useRef<any>(null);
+    const [expandedStates, setExpandedStates] = useState<Record<string, boolean>>({});
+    const [isPreencherModalOpen, setIsPreencherModalOpen] = useState(false);
+    const [preencherMonth, setPreencherMonth] = useState(format(new Date(), 'yyyy-MM'));
 
     const isAdministrative = useMemo(() => {
         return user?.role === 'Dono / Proprietário' || 
@@ -82,6 +83,36 @@ export const PointManagement = ({ user }: PointManagementProps) => {
     const getExpectedSchedule = (employee: Employee, date: string): { start: string, end: string, isOff: boolean, breakStart?: string, breakEnd?: string } => {
         const d = parseISO(date);
         const dayOfWeek = getDay(d); // 0 = Sunday, 1 = Monday, ...
+
+        if (employee.workSchedule) {
+            // Seg-Sex (1-5)
+            if (dayOfWeek >= 1 && dayOfWeek <= 5) {
+                const ms = employee.workSchedule.monToFri;
+                if (ms && ms.morning && ms.afternoon && ms.morning.start && ms.afternoon.end) {
+                    return { 
+                        start: ms.morning.start, 
+                        end: ms.afternoon.end, 
+                        isOff: false, 
+                        breakStart: ms.morning.end, 
+                        breakEnd: ms.afternoon.start 
+                    };
+                }
+            }
+            // Sáb (6)
+            if (dayOfWeek === 6) {
+                const sat = employee.workSchedule.saturday;
+                if (sat && sat.start && sat.end) {
+                    return { start: sat.start, end: sat.end, isOff: false };
+                }
+            }
+            // Dom (0)
+            if (dayOfWeek === 0) {
+                const sun = employee.workSchedule.sunday;
+                if (sun && sun.start && sun.end) {
+                    return { start: sun.start, end: sun.end, isOff: false };
+                }
+            }
+        }
 
         // Regra Unificada DM Turismo (Padrão Ana Paula / Coelho): 
         // Seg-Sex: 08:00-18:00 (Intervalo 11:30-13:00)
@@ -162,13 +193,14 @@ export const PointManagement = ({ user }: PointManagementProps) => {
         });
     };
 
-    const handleAutoFillMonth = async (employee: Employee) => {
-        const start = startOfMonth(parseISO(reportMonth + '-01'));
+    const handleAutoFillMonth = async (employee: Employee, customMonth?: string) => {
+        const targetMonth = customMonth || reportMonth;
+        const start = startOfMonth(parseISO(targetMonth + '-01'));
         const end = endOfMonth(start);
         
         const existingDates = new Set((groupedJourneys[employee.id] || [])
             .map(j => j.date)
-            .filter((d): d is string => !!d && d.startsWith(reportMonth)));
+            .filter((d): d is string => !!d && d.startsWith(targetMonth)));
         
         let count = 0;
         const batch = [];
@@ -176,11 +208,26 @@ export const PointManagement = ({ user }: PointManagementProps) => {
         const current = new Date(start);
         while (current <= end) {
             const dateStr = format(current, 'yyyy-MM-dd');
-            const expected = getExpectedSchedule(employee, dateStr);
+            const dayOfWeek = getDay(current);
+
+            // Regra Unificada DM Turismo: 08:00-18:00 (Intervalo 11:30-13:00)
+            // Se for domingo (0), podemos pular, ou manter a regra se o usuário preferir, mas vamos pular domingo.
+            if (dayOfWeek === 0) {
+                current.setDate(current.getDate() + 1);
+                continue;
+            }
+
+            const expected = { 
+                start: '08:00', 
+                end: '18:00', 
+                isOff: false, 
+                breakStart: '11:30', 
+                breakEnd: '13:00' 
+            };
 
             if (!existingDates.has(dateStr)) {
-                const startLocal = expected.isOff ? new Date(`${dateStr}T00:00`) : new Date(`${dateStr}T${expected.start}`);
-                const endLocal = expected.isOff ? new Date(`${dateStr}T00:00`) : new Date(`${dateStr}T${expected.end}`);
+                const startLocal = new Date(`${dateStr}T${expected.start}`);
+                const endLocal = new Date(`${dateStr}T${expected.end}`);
                 
                 const breaks = [];
                 if (!expected.isOff && expected.breakStart && expected.breakEnd) {
@@ -199,7 +246,7 @@ export const PointManagement = ({ user }: PointManagementProps) => {
                     entryType: expected.isOff ? 'day_off' : 'normal',
                     breaks,
                     status: 'completed',
-                    notes: 'Preenchimento Automático (Batido)',
+                    notes: 'Preenchimento Automático (Regra Unificada)',
                     createdAt: serverTimestamp()
                 });
                 count++;
@@ -305,7 +352,9 @@ export const PointManagement = ({ user }: PointManagementProps) => {
         }
     };
 
-    const generatePDF = (employee: Employee) => {
+    const generatePDF = async (employee: Employee) => {
+        const jsPDF = (await import('jspdf')).default;
+        const autoTable = (await import('jspdf-autotable')).default;
         const doc = new jsPDF();
         const start = startOfMonth(parseISO(reportMonth + '-01'));
         const end = endOfMonth(start);
@@ -427,7 +476,7 @@ export const PointManagement = ({ user }: PointManagementProps) => {
         doc.text(`TOTAL DE HORAS TRABALHADAS NO MÊS: ${finalH}h ${finalM}m`, 14, totalY);
 
         // Signatures
-        const signY = totalY + 40;
+        const signY = totalY + 60;
         doc.setFont('helvetica', 'normal');
         doc.setFontSize(8);
         
@@ -441,7 +490,9 @@ export const PointManagement = ({ user }: PointManagementProps) => {
         toast.success('Relatório PDF gerado com sucesso!');
     };
 
-    const generateMonthlyTeamSummaryPDF = () => {
+    const generateMonthlyTeamSummaryPDF = async () => {
+        const jsPDF = (await import('jspdf')).default;
+        const autoTable = (await import('jspdf-autotable')).default;
         const doc = new jsPDF('l', 'mm', 'a4');
         const start = startOfMonth(parseISO(reportMonth + '-01'));
         const end = endOfMonth(start);
@@ -593,7 +644,7 @@ export const PointManagement = ({ user }: PointManagementProps) => {
                                 </button>
                                 
                                 {isReportsMenuOpen && (
-                                    <>
+                                    <div className="reports-menu-wrapper">
                                         <div 
                                             className="fixed inset-0 z-40" 
                                             onClick={() => setIsReportsMenuOpen(false)} 
@@ -615,7 +666,7 @@ export const PointManagement = ({ user }: PointManagementProps) => {
                                                 </div>
                                                 <div>
                                                     <p className="text-[10px] font-black text-white uppercase tracking-widest">Relatório Mensal Equipe</p>
-                                                    <p className="text-[9px] text-zinc-500 font-bold uppercase mt-0.5">Visão consolidada de toda a DM</p>
+                                                    <p className="text-[9px] text-zinc-500 font-bold uppercase mt-0.5">Visão consolidada de todo o DM Turismo</p>
                                                 </div>
                                             </button>
 
@@ -648,19 +699,23 @@ export const PointManagement = ({ user }: PointManagementProps) => {
                                                 <p className="text-[8px] text-zinc-600 font-bold uppercase">Selecione o relatório para baixar em PDF</p>
                                             </div>
                                         </div>
-                                    </>
+                                    </div>
                                 )}
                             </div>
 
-                            <button 
-                                onClick={async () => {
-                                const confirmMsg = `Executar PREENCHIMENTO GLOBAL para toda a equipe (${employees.length} funcionários)?\n\nIsso gerará todos os registros faltantes para o mês de ${format(parseISO(reportMonth + '-01'), 'MMMM', { locale: ptBR })} seguindo a regra 08-18h.`;
+                        <button 
+                            onClick={async () => {
+                                // Fetch fresh list of employees just to be sure we have the latest
+                                const empSnapshot = await getDocs(collection(db, 'employees'));
+                                const freshEmployees = empSnapshot.docs.map(d => ({ id: d.id, ...d.data() } as Employee));
+
+                                const confirmMsg = `Executar PREENCHIMENTO GLOBAL para toda a equipe (${freshEmployees.length} funcionários)?\n\nIsso gerará todos os registros faltantes para o mês de ${format(parseISO(reportMonth + '-01'), 'MMMM', { locale: ptBR })} seguindo a regra 08/18h.`;
                                 if (!confirm(confirmMsg)) return;
 
                                 const toastId = toast.loading('Processando preenchimento em massa...');
                                 try {
                                     let total = 0;
-                                    for (const emp of employees) {
+                                    for (const emp of freshEmployees) {
                                         const start = startOfMonth(parseISO(reportMonth + '-01'));
                                         const end = endOfMonth(start);
                                         const existing = new Set((groupedJourneys[emp.id] || [])
@@ -704,12 +759,11 @@ export const PointManagement = ({ user }: PointManagementProps) => {
                                     toast.error('Erro no preenchimento global.', { id: toastId });
                                 }
                             }}
-                            className="flex items-center gap-2 px-6 py-3 bg-brand-accent text-zinc-950 rounded-2xl text-[11px] font-black uppercase tracking-widest hover:bg-white transition-all shadow-xl shadow-brand-accent/20 active:scale-95 border-2 border-brand-accent"
-                        >
+                            className="flex items-center gap-2 px-6 py-3 bg-brand-accent text-zinc-950 rounded-2xl text-[11px] font-black uppercase tracking-widest hover:bg-white transition-all shadow-xl shadow-brand-accent/20 active:scale-95 border-2 border-brand-accent">
+                        
                             <Clock size={16} /> Preenchimento Automático Equipe
                         </button>
-                        </>
-                    )}
+
                     <div className="flex items-center gap-2 bg-zinc-900 p-2 rounded-2xl border border-zinc-800">
                         <label className="text-[10px] font-black text-zinc-500 uppercase px-2">Período:</label>
                         <input 
@@ -719,6 +773,8 @@ export const PointManagement = ({ user }: PointManagementProps) => {
                             className="bg-zinc-950 text-white text-xs font-bold border-none focus:ring-0 rounded-lg p-1"
                         />
                     </div>
+                        </>
+                    )}
                 </div>
             </div>
             
@@ -754,10 +810,10 @@ export const PointManagement = ({ user }: PointManagementProps) => {
                                     {isAdministrative && (
                                         <>
                                             <button 
-                                                onClick={() => handleAutoFillMonth(employee)}
+                                                onClick={() => {setSelectedEmployee(employee); setIsPreencherModalOpen(true);}}
                                                 className="flex items-center gap-2 px-5 py-2.5 bg-emerald-500 text-zinc-950 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-white transition-all active:scale-95 shadow-lg shadow-emerald-500/10"
                                             >
-                                                <Clock size={14} fill="currentColor" /> Preencher Mês Inteiro
+                                                <Clock size={14} fill="currentColor" /> Preencher
                                             </button>
                                             <button 
                                                 onClick={() => handleManualAdd(employee)}
@@ -776,14 +832,15 @@ export const PointManagement = ({ user }: PointManagementProps) => {
                                 </div>
                             </div>
                             
-                            <div className="flex items-center gap-3 mb-6 bg-zinc-950/40 p-4 rounded-2xl border border-zinc-800/50">
+                            <div className="flex items-center gap-3 mb-6 bg-zinc-950/40 p-4 rounded-2xl border border-zinc-800/50 cursor-pointer" onClick={() => setExpandedStates(prev => ({ ...prev, [employee.id]: !prev[employee.id] }))}>
                                 <FileText className="w-5 h-5 text-zinc-500" />
                                 <div>
-                                    <h3 className="text-[10px] font-black text-white uppercase tracking-widest leading-none">Pré-visualização do Cartão Ponto</h3>
-                                    <p className="text-[9px] text-zinc-500 font-medium uppercase mt-1">Verifique e corrija os dados abaixo antes de exportar o PDF</p>
+                                    <h3 className="text-[10px] font-black text-white uppercase tracking-widest leading-none">Pré-visualização do Cartão Ponto {expandedStates[employee.id] ? '(Ocultar)' : '(Mostrar)'}</h3>
+                                    <p className="text-[9px] text-zinc-500 font-medium uppercase mt-1">Clique para {expandedStates[employee.id] ? 'ocultar' : 'exibir'} a pré-visualização</p>
                                 </div>
                             </div>
                             
+                            {expandedStates[employee.id] && (
                             <div className="overflow-x-auto rounded-xl border border-zinc-800/50 shadow-inner bg-zinc-950/20">
                                 <table className="w-full text-left text-xs text-zinc-300">
                                     <thead className="bg-zinc-950 text-[10px] font-black uppercase tracking-[0.2em] text-zinc-500">
@@ -910,6 +967,7 @@ export const PointManagement = ({ user }: PointManagementProps) => {
                                     </tbody>
                                 </table>
                             </div>
+                            )}
 
                             {(() => {
                                 let totalMinutes = 0;
@@ -1061,6 +1119,32 @@ export const PointManagement = ({ user }: PointManagementProps) => {
                 </div>
             </Modal>
             
+            {isPreencherModalOpen && selectedEmployee && (
+                <Modal 
+                    isOpen={isPreencherModalOpen}
+                    onClose={() => setIsPreencherModalOpen(false)}
+                    title={`Preencher Cartão: ${selectedEmployee.name}`}
+                >
+                    <div className="space-y-6">
+                        <Input 
+                            label="Mês/Ano de Referência"
+                            type="month"
+                            value={preencherMonth}
+                            onChange={(e: any) => setPreencherMonth(e.target.value)}
+                        />
+                        <Button 
+                            variant="primary" 
+                            onClick={async () => {
+                                await handleAutoFillMonth(selectedEmployee, preencherMonth);
+                                setIsPreencherModalOpen(false);
+                            }}
+                        >
+                            Confirmar Preenchimento
+                        </Button>
+                    </div>
+                </Modal>
+            )}
+            
             <ConfirmModal
                 isOpen={deleteConfirm.isOpen}
                 onClose={() => setDeleteConfirm({ isOpen: false, journey: null })}
@@ -1072,7 +1156,7 @@ export const PointManagement = ({ user }: PointManagementProps) => {
     );
 };
 
-function parseDate(dateStr: any): Date {
+const parseDate = (dateStr: any): Date => {
     if (!dateStr) return new Date(NaN);
     if (typeof dateStr === 'string' && dateStr.includes('/')) {
         const [d, m, y] = dateStr.split('/');
@@ -1080,4 +1164,5 @@ function parseDate(dateStr: any): Date {
     }
     const d = new Date(dateStr);
     return isNaN(d.getTime()) ? new Date(NaN) : d;
-}
+};
+

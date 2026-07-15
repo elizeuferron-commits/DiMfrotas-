@@ -11,18 +11,12 @@ export function PermissionsManagement() {
 
   const modules = [
     { id: 'dashboard', label: 'Dashboard' },
-    { id: 'fleet', label: 'Frota' },
-    { id: 'maintenance', label: 'Manutenção' },
-    { id: 'fuel', label: 'Combustível' },
-    { id: 'trips', label: 'Viagens' },
-    { id: 'os', label: 'Ordens de Serviço' },
-    { id: 'finance', label: 'Financeiro' },
-    { id: 'staff', label: 'Equipe' },
-    { id: 'reports', label: 'Relatórios' },
-    { id: 'vencimentos', label: 'Vencimentos' },
-    { id: 'fretamento', label: 'Fretamento' },
-    { id: 'criador', label: 'Criador' },
-    { id: 'point', label: 'Cartão Ponto' }
+    { id: 'trips', label: 'Trabalhos' },
+    { id: 'fleet', label: 'Gestão de Frotas' },
+    { id: 'finance', label: 'Financeiros' },
+    { id: 'fuel', label: 'Abastecimento' },
+    { id: 'inventory', label: 'Almoxarifado' },
+    { id: 'gabinete', label: 'Gabinete' }
   ];
 
   const togglePermission = (role: string, moduleId: string) => {

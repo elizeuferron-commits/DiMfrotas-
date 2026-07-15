@@ -38,6 +38,33 @@ import { auditService, AuditLog } from '../services/auditService';
 import { geminiService } from '../services/geminiService';
 import { toast } from 'sonner';
 
+// Import Firestore elements to query Cloud Function auto-backup logs
+import { db } from '../lib/firebase';
+import { collection, query, orderBy, limit, getDocs } from 'firebase/firestore';
+
+const safeFormatDate = (timestamp: any, formatStr: string = 'dd/MM/yyyy HH:mm'): string => {
+  if (!timestamp) return 'Agora';
+  try {
+    let date: Date;
+    if (typeof timestamp.toDate === 'function') {
+      date = timestamp.toDate();
+    } else if (timestamp instanceof Date) {
+      date = timestamp;
+    } else if (timestamp.seconds !== undefined) {
+      date = new Date(timestamp.seconds * 1000);
+    } else {
+      date = new Date(timestamp);
+    }
+    if (isNaN(date.getTime())) {
+      return 'Agora';
+    }
+    return format(date, formatStr);
+  } catch (e) {
+    console.error("Error formatting date:", e, timestamp);
+    return 'Agora';
+  }
+};
+
 export const CreationTool: React.FC = () => {
   const [lastBackup, setLastBackup] = useState<BackupRecord | null>(null);
   const [isBackingUp, setIsBackingUp] = useState(false);
@@ -55,6 +82,10 @@ export const CreationTool: React.FC = () => {
   const [isExecuting, setIsExecuting] = useState(false);
   const recognitionRef = useRef<any>(null);
 
+  // Cloud Function auto-backup logs state
+  const [cloudBackups, setCloudBackups] = useState<any[]>([]);
+  const [isCloudBackingUp, setIsCloudBackingUp] = useState(false);
+
   const speak = (text: string) => {
     if (!isVoiceEnabled) return;
     window.speechSynthesis.cancel();
@@ -69,7 +100,7 @@ export const CreationTool: React.FC = () => {
     setPendingUpdate(null);
     setChatHistory(prev => [...prev, { 
       role: 'ai', 
-      text: 'Entendido, Elizeu. Alteração descartada. O Sistema DM Pro permanece em seu estado estável atual. O que mais posso ajudar?' 
+      text: 'Entendido, Elizeu. Alteração descartada. O Sistema DM Turismo Pro permanece em seu estado estável atual. O que mais posso ajudar?' 
     }]);
     speak("Alteração descartada.");
   };
@@ -119,8 +150,8 @@ export const CreationTool: React.FC = () => {
     setIsTyping(true);
 
     try {
-      // System instructions to guide the AI to act as the DM Pro Consultant
-      const systemInstruction = `Você é o "Consultor DM Pro", um agente de IA especializado em auxiliar Elizeu Ferron na gestão técnica da DM Turismo.
+      // System instructions to guide the AI to act as the DM Turismo Pro Consultant
+      const systemInstruction = `Você é o "Consultor DM Turismo Pro", um agente de IA especializado em auxiliar Elizeu Ferron na gestão técnica da DM Turismo.
       Sua personalidade é técnica, proativa e focada em engenharia de software e logística.
       Sempre que Elizeu pedir para "otimizar", "melhorar", "atualizar" ou mencionar novas tecnologias, analise e sugira uma "Proposta de Atualização Automática".
       FORMATO DE RESPOSTA PARA PROPOSTAS:
@@ -212,13 +243,13 @@ export const CreationTool: React.FC = () => {
     }
   };
 
-  useEffect(() => {
+  const loadAllBackups = () => {
     backupService.getLastBackup().then(latest => {
       setLastBackup(latest);
       
       // Automatic Backup Logic: If last backup is > 1h, trigger one silently (Unlimited Creation Context)
       if (latest && latest.timestamp) {
-        const lastDate = latest.timestamp.toDate();
+        const lastDate = typeof (latest.timestamp as any).toDate === 'function' ? (latest.timestamp as any).toDate() : (latest.timestamp instanceof Date ? latest.timestamp : new Date(latest.timestamp as any));
         const now = new Date();
         const diffHours = (now.getTime() - lastDate.getTime()) / (1000 * 60 * 60);
         
@@ -231,6 +262,21 @@ export const CreationTool: React.FC = () => {
       }
     });
 
+    // Query both manual & auto backups, filter client-side to avoid composite indexing dependencies
+    getDocs(query(collection(db, 'backups'), orderBy('timestamp', 'desc'), limit(20)))
+      .then(snap => {
+        const list = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        const automatics = list.filter((b: any) => b.createdBy === 'AUTO_CLOUD_FUNCTION' || b.createdBy === 'SYSTEM_CLOUD_FUNCTION' || b.status === 'MANUAL_EXPORT' || b.size === -1);
+        setCloudBackups(automatics);
+      })
+      .catch(err => {
+        console.error("Error loading cloud backup list", err);
+      });
+  };
+
+  useEffect(() => {
+    loadAllBackups();
+
     // Load Audit Logs
     auditService.getRecentLogs(10).then(logs => {
       setAuditLogs(logs);
@@ -242,14 +288,32 @@ export const CreationTool: React.FC = () => {
     setIsBackingUp(true);
     try {
       const id = await backupService.performFullBackup('elizeuferron@gmail.com');
-      const latest = await backupService.getLastBackup();
-      setLastBackup(latest);
+      loadAllBackups();
       toast.success('Backup realizado com sucesso! ID: ' + id.substring(0,6));
     } catch (error) {
       toast.error('Erro ao realizar backup');
       console.error(error);
     } finally {
       setIsBackingUp(false);
+    }
+  };
+
+  const handleCloudExportBackup = async () => {
+    setIsCloudBackingUp(true);
+    try {
+      const res = await backupService.triggerCloudBackup();
+      if (res.success) {
+        toast.success('Backup manual em Nuvem (Storage) iniciado com sucesso!');
+        loadAllBackups();
+      } else {
+        toast.error('Erro ao disparar a Cloud Function.');
+      }
+    } catch (err: any) {
+      console.warn("Erro ao contactar Cloud Functions:", err);
+      toast.warning('Atenção: A Cloud Function não respondeu. Efetuando backup alternativo de banco local...', { duration: 4000 });
+      await handleManualBackup();
+    } finally {
+      setIsCloudBackingUp(false);
     }
   };
 
@@ -261,7 +325,7 @@ export const CreationTool: React.FC = () => {
         { label: "Arquitetura React + Vite", done: true },
         { label: "Integração Firebase (Auth/Firestore)", done: true },
         { label: "Sistema de Permissões RBAC", done: true },
-        { label: "Design System DM Pro (Dark Mode)", done: true }
+        { label: "Design System DM Turismo Pro (Dark Mode)", done: true }
       ]
     },
     {
@@ -384,7 +448,7 @@ export const CreationTool: React.FC = () => {
                 <MessageSquare size={18} className="text-brand-accent" />
               </div>
               <div>
-                <h3 className="text-sm font-black text-white uppercase tracking-wider">Consultor DM Pro</h3>
+                <h3 className="text-sm font-black text-white uppercase tracking-wider">Consultor DM Turismo Pro</h3>
                 <p className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest mt-0.5">Canal Direto com Elizeu Ferron</p>
               </div>
             </div>
@@ -416,7 +480,7 @@ export const CreationTool: React.FC = () => {
                 <h3 className="font-black text-[10px] uppercase tracking-widest">Estratégia de Ecossistema (Satélites)</h3>
               </div>
               <p className="text-[10px] text-zinc-500 leading-relaxed font-medium">
-                O DM Pro atua como o seu "Command Center". Você pode expandir a coleta de dados e inteligência usando ferramentas integradas:
+                O DM Turismo Pro atua como o seu "Command Center". Você pode expandir a coleta de dados e inteligência usando ferramentas integradas:
               </p>
               
               <div className="space-y-4">
@@ -445,7 +509,7 @@ export const CreationTool: React.FC = () => {
                   </p>
                   <button 
                     className="w-full py-2 bg-indigo-500 text-white rounded-lg text-[8px] font-black uppercase tracking-widest hover:bg-white hover:text-indigo-900 transition-all shadow-lg shadow-indigo-500/20"
-                    onClick={() => handleSendMessage("Como podemos migrar a inteligência do DM Pro para a Vertex AI no Google Cloud?")}
+                    onClick={() => handleSendMessage("Como podemos migrar a inteligência do DM Turismo Pro para a Vertex AI no Google Cloud?")}
                   >
                     Planejar Migração Enterprise
                   </button>
@@ -454,7 +518,7 @@ export const CreationTool: React.FC = () => {
 
               <button 
                 className="w-full mt-2 py-3 bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-white rounded-xl text-[9px] font-black uppercase tracking-widest transition-all"
-                onClick={() => handleSendMessage("Como o DM Pro pode se integrar ao AppSheet para otimizar os checklists?")}
+                onClick={() => handleSendMessage("Como o DM Turismo Pro pode se integrar ao AppSheet para otimizar os checklists?")}
               >
                 Consultar Estratégia de Integração
               </button>
@@ -500,11 +564,11 @@ export const CreationTool: React.FC = () => {
                   initial={{ opacity: 0, y: 20 }}
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, scale: 0.95 }}
-                  className="bg-brand-accent/10 border border-brand-accent/30 rounded-2xl p-6 mt-4 space-y-4 shadow-[0_0_40px_rgba(255,107,0,0.1)] relative overflow-hidden"
+                  className="bg-brand-accent/10 border border-brand-accent/30 rounded-2xl p-6 mt-4 space-y-4 shadow-[0_0_40px_rgba(26,80,241,0.1)] relative overflow-hidden"
                 >
                   {isExecuting && (
                     <motion.div 
-                      className="absolute top-0 left-0 h-1 bg-brand-accent shadow-[0_0_10px_#ff6b00]"
+                      className="absolute top-0 left-0 h-1 bg-brand-accent shadow-[0_0_10px_#1a50f1]"
                       initial={{ width: 0 }}
                       animate={{ width: `${executionProgress}%` }}
                     />
@@ -582,7 +646,7 @@ export const CreationTool: React.FC = () => {
                 value={chatMessage}
                 onChange={(e) => setChatMessage(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}
-                placeholder="Solicitar ajuste técnico ao Sistema DM Pro..."
+                placeholder="Solicitar ajuste técnico ao Sistema DM Turismo Pro..."
                 className="w-full bg-zinc-900 border border-zinc-800 focus:border-brand-accent rounded-2xl p-4 pr-24 text-xs font-bold text-white placeholder:text-zinc-600 transition-all outline-none"
               />
               <div className="absolute right-2 top-2 flex gap-2">
@@ -617,14 +681,24 @@ export const CreationTool: React.FC = () => {
               </div>
               <h3 className="text-sm font-black text-white uppercase tracking-wider">Gestão de Backups</h3>
             </div>
-            <button 
-              onClick={handleManualBackup}
-              disabled={isBackingUp}
-              className="flex items-center gap-2 bg-emerald-500 hover:bg-emerald-600 text-black px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all disabled:opacity-50"
-            >
-              {isBackingUp ? <CloudUpload size={14} className="animate-bounce" /> : <CloudUpload size={14} />}
-              Executar Backup Agora
-            </button>
+            <div className="flex gap-2">
+              <button 
+                onClick={handleCloudExportBackup}
+                disabled={isCloudBackingUp || isBackingUp}
+                className="flex items-center gap-2 bg-brand-accent hover:bg-white text-zinc-950 px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all disabled:opacity-50"
+              >
+                {isCloudBackingUp ? <CloudUpload size={14} className="animate-bounce" /> : <CloudUpload size={14} />}
+                Exportar para Storage
+              </button>
+              <button 
+                onClick={handleManualBackup}
+                disabled={isBackingUp || isCloudBackingUp}
+                className="flex items-center gap-2 bg-zinc-900 border border-zinc-800 hover:bg-zinc-800 text-white px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all disabled:opacity-50"
+              >
+                {isBackingUp ? <CloudUpload size={14} className="animate-bounce" /> : <HardDrive size={14} />}
+                Backup Local
+              </button>
+            </div>
           </div>
 
           <div className="space-y-4">
@@ -635,9 +709,9 @@ export const CreationTool: React.FC = () => {
                     <Clock size={18} />
                   </div>
                   <div>
-                    <p className="text-[10px] font-black text-zinc-500 uppercase tracking-widest">Último Snaphot</p>
+                    <p className="text-[10px] font-black text-zinc-500 uppercase tracking-widest">Último Snapshot Manual</p>
                     <p className="text-sm font-black text-white uppercase italic">
-                      {lastBackup.timestamp ? format(lastBackup.timestamp.toDate(), 'dd/MM/yyyy HH:mm') : 'Agora'}
+                      {safeFormatDate(lastBackup.timestamp, 'dd/MM/yyyy HH:mm')}
                     </p>
                     <p className="text-[9px] font-bold text-emerald-500 uppercase tracking-tighter mt-1">
                       {lastBackup.size} registros salvos com sucesso
@@ -657,10 +731,61 @@ export const CreationTool: React.FC = () => {
               </div>
             )}
 
+            {/* Cloud Auto-Backup Info (Cloud Function Backup Section) */}
+            <div className="p-5 bg-brand-accent/5 border border-brand-accent/10 rounded-2xl space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="w-8 h-8 rounded-lg bg-brand-accent/10 flex items-center justify-center text-brand-accent">
+                    <Globe size={14} />
+                  </div>
+                  <div>
+                    <h4 className="text-[10px] font-black text-white uppercase tracking-widest leading-none">Auto-Backup Diário na Nuvem</h4>
+                    <p className="text-[8px] font-bold text-zinc-500 uppercase tracking-widest mt-1">GCP Cloud Function (Scheduled)</p>
+                  </div>
+                </div>
+                <span className="px-2 py-0.5 bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 rounded text-[8px] font-black uppercase">Ativo</span>
+              </div>
+              
+              <div className="text-[9.5px] font-extrabold text-zinc-400 space-y-1 bg-zinc-950/40 p-3 rounded-xl border border-zinc-900 font-mono">
+                <div>• Cron: <code className="text-white">0 0 * * *</code> (Diário às 00:00)</div>
+                <div>• Destino: <code className="text-brand-accent break-all text-[8px]">gs://gen-lang-client-0708969846.firebasestorage.app/firestore_backups/</code></div>
+                <div>• Trigger: <code className="text-emerald-400">scheduledFirestoreBackup</code> (v2 scheduler)</div>
+              </div>
+
+              {/* Automation history logs */}
+              <div className="space-y-2 pt-2 border-t border-zinc-900/50">
+                <p className="text-[8px] font-black text-zinc-500 uppercase tracking-widest mb-1.5">Logs de Execuções Automáticas</p>
+                {cloudBackups.length > 0 ? (
+                  <div className="max-h-[140px] overflow-y-auto space-y-1.5 pr-1 custom-scrollbar">
+                    {cloudBackups.map((backup) => (
+                      <div key={backup.id} className="p-2.5 bg-zinc-900/40 border border-zinc-900 rounded-xl flex items-center justify-between text-[9px] font-bold hover:border-brand-accent/10 transition-all">
+                        <div className="flex items-center gap-2">
+                          <CheckCircle2 size={11} className="text-emerald-500" />
+                          <div className="truncate max-w-[150px]">
+                            <p className="text-zinc-300 font-mono text-[8.5px] truncate">Auto-Snapshot</p>
+                            <p className="text-[7.5px] text-zinc-600 truncate">{backup.gcsPath || "NATIVE Export"}</p>
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <span className="text-zinc-500 text-[8px] uppercase tracking-tighter">
+                            {safeFormatDate(backup.timestamp, 'dd/MM/yyyy HH:mm')}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="p-3 border border-dashed border-zinc-900 rounded-xl text-center text-[9px] font-semibold text-zinc-600">
+                    Sistema agendado pronto. Aguardando o primeiro disparo diário à meia-noite.
+                  </div>
+                )}
+              </div>
+            </div>
+
             <div className="p-4 bg-emerald-500/5 border border-emerald-500/10 rounded-xl flex gap-3 text-emerald-500/60 italic leading-relaxed text-[10px] font-bold">
               <Zap size={16} className="shrink-0" />
               <span>
-                "Criação Ilimitada" Ativa: O Sistema DM Pro permite infinitas atualizações e snapshots durante o dia. Sincronização em tempo real desbloqueada para Elizeu Ferron.
+                "Criação Ilimitada" Ativa: O Sistema DM Turismo Pro permite infinitas atualizações e snapshots durante o dia. Sincronização em tempo real desbloqueada para Elizeu Ferron.
               </span>
             </div>
           </div>
@@ -704,7 +829,7 @@ export const CreationTool: React.FC = () => {
                     </div>
                     <div className="text-right">
                       <p className="text-[9px] font-black text-zinc-500 uppercase">
-                        {log.timestamp ? format(log.timestamp.toDate(), 'HH:mm') : 'Agora'}
+                        {safeFormatDate(log.timestamp, 'HH:mm')}
                       </p>
                     </div>
                   </div>
@@ -769,7 +894,7 @@ export const CreationTool: React.FC = () => {
              <h2 className="text-xl font-black text-white uppercase tracking-tighter italic">App Independente (Executável)</h2>
           </div>
           <p className="text-zinc-300 text-[11px] font-medium leading-relaxed">
-            O Sistema DM Pro foi projetado com <span className="text-brand-accent">Autonomia de Execução</span>. Através do protocolo PWA (Progressive Web App), o sistema pode ser instalado como um binário nativo em Windows, Linux, Android e iOS.
+            O Sistema DM Turismo Pro foi projetado com <span className="text-brand-accent">Autonomia de Execução</span>. Através do protocolo PWA (Progressive Web App), o sistema pode ser instalado como um binário nativo em Windows, Linux, Android e iOS.
           </p>
           <div className="flex flex-wrap gap-4 pt-2">
              <div className="px-4 py-2 bg-zinc-900 border border-zinc-800 rounded-xl flex items-center gap-2">
@@ -786,7 +911,7 @@ export const CreationTool: React.FC = () => {
         <div className="p-10 bg-emerald-500/5 border border-dashed border-emerald-500/20 rounded-3xl space-y-4">
           <h2 className="text-xl font-black text-white uppercase tracking-tighter italic">Sugestão de Performance</h2>
           <p className="text-zinc-300 text-[11px] font-medium leading-relaxed">
-            Para reduzir o tempo de carregamento inicial em 40%, recomenda-se o comando <code className="text-emerald-500 bg-emerald-500/10 px-2 py-0.5 rounded">npm run build -- --minify esbuild</code>. Além disso, o uso de <span className="text-emerald-500">Tree Shaking</span> automático no Vite garante que apenas o código utilizado seja incluído no binário final.
+            Para reduzir o tempo de carregamento inicial em 40%, recomenda-se o comando <code className="text-emerald-500 bg-emerald-500/10 px-2 py-0.5 rounded">npm run build -- --minify esbuild</code>. Além disso, o uso de <span className="text-emerald-500">Tree Shaking</span> automático no Vite guarantees que apenas o código utilizado seja incluído no binário final.
           </p>
         </div>
       </div>
